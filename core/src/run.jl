@@ -26,11 +26,12 @@ end
 
 Run the configured periods over an existing state and result buffer.
 """
-function run_simulation!(cfg::SimConfig, state::SimState, results::ResultBuffers)
+function run_simulation!(cfg::SimConfig, state::SimState, results::ResultBuffers;
+                         initialize::Bool = true)
     records = div(cfg.periods, cfg.record_interval)
     _resize_results!(results, records)
 
-    reset_state!(state, cfg)
+    initialize && reset_state!(state, cfg)
     rng = Rng(cfg.seed)
     index = 0
 

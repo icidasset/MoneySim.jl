@@ -8,6 +8,7 @@ mutable struct SimState
     wealth::Vector{Money}
     income::Vector{Money}
     expenses::Vector{Money}
+    debt::Vector{Money}
     gi_eligible::Vector{UInt8}
     alive::Vector{UInt8}
     age_type::Vector{UInt8}
@@ -26,6 +27,7 @@ function SimState(n::Integer = 0)
         age_type[i] = UInt8(0)
     end
     return SimState(count,
+                    fill(MONEY_ZERO, count),
                     fill(MONEY_ZERO, count),
                     fill(MONEY_ZERO, count),
                     fill(MONEY_ZERO, count),
@@ -53,6 +55,7 @@ function reset_state!(state::SimState, cfg::SimConfig)
         resize!(state.wealth, n)
         resize!(state.income, n)
         resize!(state.expenses, n)
+        resize!(state.debt, n)
         resize!(state.gi_eligible, n)
         resize!(state.alive, n)
         resize!(state.age_type, n)
@@ -63,6 +66,7 @@ function reset_state!(state::SimState, cfg::SimConfig)
 
     fill!(state.income, MONEY_ZERO)
     fill!(state.expenses, MONEY_ZERO)
+    fill!(state.debt, MONEY_ZERO)
     for i in 1:n
         state.alive[i] = UInt8(1)
         state.age_type[i] = UInt8(0)
