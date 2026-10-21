@@ -4,8 +4,8 @@ This directory holds the before/after test suite for the WASM-ready refactor.
 The papers under `jupyter/` are the external oracle; a captured baseline is the
 internal oracle.
 
-The full design is in
-[`docs/plans/2026-10-21-wasm-ready-core.md`](../../docs/plans/2026-10-21-wasm-ready-core.md),
+The full design is in the
+[`sim.wasm` plan](https://github.com/HapponomyOrg/sim.wasm/blob/main/docs/plans/2026-10-21-wasm-ready-core.md),
 §9.
 
 ## Why
