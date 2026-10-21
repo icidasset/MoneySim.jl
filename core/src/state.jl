@@ -10,6 +10,8 @@ mutable struct SimState
     expenses::Vector{Money}
     debt::Vector{Money}
     tax_owed::Vector{Money}
+    notional::Vector{Money}
+    notional_active::Bool
     gi_eligible::Vector{UInt8}
     alive::Vector{UInt8}
     age_type::Vector{UInt8}
@@ -46,6 +48,8 @@ function SimState(n::Integer = 0)
                     fill(MONEY_ZERO, count),
                     fill(MONEY_ZERO, count),
                     fill(MONEY_ZERO, count),
+                    fill(MONEY_ZERO, count),
+                    false,
                     gi_eligible,
                     alive,
                     age_type,
@@ -85,6 +89,7 @@ function reset_state!(state::SimState, cfg::SimConfig)
         resize!(state.expenses, n)
         resize!(state.debt, n)
         resize!(state.tax_owed, n)
+        resize!(state.notional, n)
         resize!(state.gi_eligible, n)
         resize!(state.alive, n)
         resize!(state.age_type, n)
@@ -97,6 +102,18 @@ function reset_state!(state::SimState, cfg::SimConfig)
     fill!(state.expenses, MONEY_ZERO)
     fill!(state.debt, MONEY_ZERO)
     fill!(state.tax_owed, MONEY_ZERO)
+    if isempty(cfg.tax.notional)
+        fill!(state.notional, MONEY_ZERO)
+        state.notional_active = false
+    else
+        for i in 1:min(n, length(cfg.tax.notional))
+            state.notional[i] = cfg.tax.notional[i]
+        end
+        for i in (length(cfg.tax.notional) + 1):n
+            state.notional[i] = MONEY_ZERO
+        end
+        state.notional_active = true
+    end
     state.tax_slices = 0
     state.tax_scale = 1.0
     state.government_debt = cfg.government.initial_debt

@@ -118,6 +118,13 @@ function tax_step_wealth!(state::SimState, cfg::TaxConfig, period::Int)
     return collected
 end
 
+@inline function _income_base(state::SimState, i::Int)
+    if state.notional_active
+        return Money(round(Int64, Float64(state.notional[i].value) * state.gdp_factor))
+    end
+    return state.income[i]
+end
+
 """
     tax_step_income!(state, cfg, period) -> Money
 
@@ -134,7 +141,7 @@ function tax_step_income!(state::SimState, cfg::TaxConfig, period::Int)
         projected = MONEY_ZERO
         for i in eachindex(state.wealth)
             is_alive(state, i) || continue
-            base = state.income[i]
+            base = _income_base(state, i)
             if base > MONEY_ZERO
                 projected += bracket_tax(base, cfg.brackets, cfg.bracket_rates)
             end
@@ -152,7 +159,7 @@ function tax_step_income!(state::SimState, cfg::TaxConfig, period::Int)
 
         for i in eachindex(state.wealth)
             is_alive(state, i) || continue
-            base = state.income[i]
+            base = _income_base(state, i)
             state.tax_owed[i] = base > MONEY_ZERO ?
                 bracket_tax(base, cfg.brackets, applied) : MONEY_ZERO
             state.income[i] = MONEY_ZERO

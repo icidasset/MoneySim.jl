@@ -120,7 +120,8 @@ end
 Dispatch to the configured money model.
 """
 function _paper_interest(remaining::Money, rate::Int64)::Money
-    return Money(round(Int64, Float64(remaining.value) * Float64(rate) / 10000.0))
+    value = Float64(remaining.value) / 10000.0 * (Float64(rate) / 10000.0)
+    return Money(round(Int64, value * 10000.0))
 end
 
 function _paper_loan(pool::Money, loan_rate::Int64)::Money

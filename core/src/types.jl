@@ -100,6 +100,7 @@ struct TaxConfig
     bracket_rates::Vector{Int64}
     target_revenue::Money
     scale_to_target::Bool
+    notional::Vector{Money}
 end
 
 function TaxConfig(; kind::TaxKind.Kind = TaxKind.NONE,
@@ -110,10 +111,11 @@ function TaxConfig(; kind::TaxKind.Kind = TaxKind.NONE,
                    brackets::Vector{Money} = Money[],
                    bracket_rates::Vector{Int64} = Int64[],
                    target_revenue::Money = MONEY_ZERO,
-                   scale_to_target::Bool = false)
+                   scale_to_target::Bool = false,
+                   notional::Vector{Money} = Money[])
     return TaxConfig(kind, permyriad(rate), Int(interval), recipient,
                      Int(recipient_actor), brackets, bracket_rates,
-                     target_revenue, scale_to_target)
+                     target_revenue, scale_to_target, notional)
 end
 
 """
