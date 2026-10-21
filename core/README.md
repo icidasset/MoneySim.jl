@@ -16,7 +16,7 @@ This is Phase 4a of the wasm-ready core plan. The canonical plan lives in
 | `src/metrics.jl` | Gini, mean/total/min/max, cumulative percentile shares, income Gini, tax scale, public debt |
 | `src/transactions.jl` | Yard-sale transactions and the GDP volume target |
 | `src/taxes.jl` | Wealth levy, progressive income tax with target scaling, all four recipient modes |
-| `src/money_models.jl` | SUMSY (GI + demurrage), homogeneous debt-based interest, post-Keynesian bank |
+| `src/money_models.jl` | SUMSY (GI + demurrage), homogeneous debt-based interest, post-Keynesian bank, paper-1 loan circuit |
 | `src/population.jl` | Fixed population, births/deaths/aging, typed GI eligibility |
 | `src/adaptations.jl` | Money injection and destruction |
 | `src/run.jl` | `run_simulation` / `run_simulation!` |
@@ -29,10 +29,10 @@ julia --project=core -e 'using Pkg; Pkg.test()'
 
 ## Status
 
-- 74 native tests pass.
-- Phase 4a features are implemented: income tax with brackets/target scaling,
-  demographics, government deficit/public debt, GDP volume target, money
-  adaptations, and the post-Keynesian bank.
+- 84 native tests pass.
+- Phase 4b is complete for the current sim.wasm surface: the paper-1 loan
+  circuit (growth and loan-rate modes, bank reserves, collapse rule) is
+  implemented and matches the stable/collapse reference totals.
 - The full minimal path runs under WasmTarget through `sim.wasm/wasm/`; the
   final Gini is bit-identical to native (`0.32961367869746727`).
 
@@ -58,9 +58,7 @@ WasmTarget 0.5.3 cannot lower `@enum` equality, so the named values are
 `const Int32` constants in small modules. Call sites and the future schema are
 unaffected.
 
-## Not here yet (Phase 4b)
+## Not here yet
 
-- The paper-1 loan circuit.
 - VAT and demurrage tax (not required by the current sim.wasm surface).
-- The Phase 4a features are not yet exposed in the minimal wasm ABI/TS
-  surface; native `SimConfig` supports them today.
+- The legacy `engine_run`/TypeScript cutover (Phase 3b).

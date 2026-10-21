@@ -128,7 +128,9 @@ function record_wealth!(results::ResultBuffers, state::SimState, index::Int,
 
     results.tax_collected[index] = currency(collected)
     results.tax_scale[index] = state.tax_scale
-    results.government_debt[index] = currency(state.government_debt)
+    results.government_debt[index] = currency(state.loan_circuit_active ?
+                                              state.bank_reserve :
+                                              state.government_debt)
 
     if m == 0
         results.gini[index] = 0.0

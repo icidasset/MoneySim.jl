@@ -39,7 +39,10 @@ function run_simulation!(cfg::SimConfig, state::SimState, results::ResultBuffers
 
     for period in 1:cfg.periods
         population_step!(state, cfg.population, period, rng)
-        step_money!(state, cfg.money, cfg.bank, period)
+        step_money!(state, cfg.money, cfg.bank, cfg.loan_circuit, period)
+        if cfg.money.model === MoneyModel.LOAN_CIRCUIT && state.loan_collapsed
+            break
+        end
         adaptations_step!(state, cfg.adaptations, period)
         transactions_step!(state, cfg.transactions, cfg.gdp, rng)
 
@@ -57,6 +60,7 @@ function run_simulation!(cfg::SimConfig, state::SimState, results::ResultBuffers
         end
     end
 
+    _resize_results!(results, index)
     return SimResult(results, index)
 end
 

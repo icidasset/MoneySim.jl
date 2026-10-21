@@ -17,6 +17,15 @@ mutable struct SimState
     tax_scale::Float64
     government_debt::Money
     gdp_factor::Float64
+    loan_pool::Money
+    loan_initialized::Bool
+    loan_collapsed::Bool
+    loan_book_principal::Vector{Money}
+    loan_book_cycles::Vector{Int}
+    loan_book_rate::Vector{Int64}
+    loan_book_installment::Vector{Money}
+    bank_reserve::Money
+    loan_circuit_active::Bool
     scratch::Vector{Float64}
     income_scratch::Vector{Float64}
 end
@@ -44,6 +53,15 @@ function SimState(n::Integer = 0)
                     1.0,
                     MONEY_ZERO,
                     1.0,
+                    MONEY_ZERO,
+                    false,
+                    false,
+                    Vector{Money}(undef, 0),
+                    Vector{Int}(undef, 0),
+                    Vector{Int64}(undef, 0),
+                    Vector{Money}(undef, 0),
+                    MONEY_ZERO,
+                    false,
                     Vector{Float64}(undef, count),
                     Vector{Float64}(undef, count))
 end
@@ -83,6 +101,15 @@ function reset_state!(state::SimState, cfg::SimConfig)
     state.tax_scale = 1.0
     state.government_debt = cfg.government.initial_debt
     state.gdp_factor = 1.0
+    state.loan_pool = MONEY_ZERO
+    state.loan_initialized = false
+    state.loan_collapsed = false
+    empty!(state.loan_book_principal)
+    empty!(state.loan_book_cycles)
+    empty!(state.loan_book_rate)
+    empty!(state.loan_book_installment)
+    state.bank_reserve = MONEY_ZERO
+    state.loan_circuit_active = cfg.money.model === MoneyModel.LOAN_CIRCUIT
     for i in 1:n
         state.alive[i] = UInt8(1)
         state.age_type[i] = UInt8(0)

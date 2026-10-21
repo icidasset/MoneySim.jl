@@ -206,6 +206,28 @@ function BankConfig(; enabled::Bool = false,
 end
 
 """
+    LoanCircuitConfig
+
+Paper-1 post-Keynesian loan circuit. `mode = 0` is fixed growth; `mode = 1`
+is fixed loan rate. In loan-rate mode the loan book lives in `SimState` and
+money in circulation is resynchronised pro-rata to the aggregate pool.
+"""
+struct LoanCircuitConfig
+    enabled::Bool
+    profit_rate::Int64
+    maturity::Int
+    mode::Int32
+end
+
+function LoanCircuitConfig(; enabled::Bool = false,
+                           profit_rate::Real = 0.0,
+                           maturity::Integer = 1,
+                           mode::Integer = 1)
+    return LoanCircuitConfig(enabled, permyriad(profit_rate), Int(maturity),
+                             Int32(mode))
+end
+
+"""
     WealthConfig
 
 Initial wealth distribution. For `CUSTOM`, `custom[i]` is actor `i`'s starting
@@ -279,6 +301,7 @@ struct SimConfig
     gdp::GdpConfig
     adaptations::AdaptationConfig
     bank::BankConfig
+    loan_circuit::LoanCircuitConfig
 end
 
 function SimConfig(; periods::Integer = 100,
@@ -292,10 +315,11 @@ function SimConfig(; periods::Integer = 100,
                    government::GovernmentConfig = GovernmentConfig(),
                    gdp::GdpConfig = GdpConfig(),
                    adaptations::AdaptationConfig = AdaptationConfig(),
-                   bank::BankConfig = BankConfig())
+                   bank::BankConfig = BankConfig(),
+                   loan_circuit::LoanCircuitConfig = LoanCircuitConfig())
     return SimConfig(Int(periods), UInt64(seed), Int(record_interval), money,
                      wealth, transactions, tax, population, government, gdp,
-                     adaptations, bank)
+                     adaptations, bank, loan_circuit)
 end
 
 const CONFIG_OK = Int32(0)
@@ -341,7 +365,7 @@ end
 
 export MoneyModel, TaxKind, TaxRecipient, WealthDistribution
 export MoneyConfig, TransactionConfig, TaxConfig, WealthConfig, PopulationConfig
-export GovernmentConfig, GdpConfig, AdaptationConfig, BankConfig, SimConfig
+export GovernmentConfig, GdpConfig, AdaptationConfig, BankConfig, LoanCircuitConfig, SimConfig
 export CONFIG_OK, CONFIG_BAD_PERIODS, CONFIG_BAD_RECORD_INTERVAL
 export CONFIG_BAD_POPULATION, CONFIG_BAD_MONEY_INTERVAL, CONFIG_BAD_TAX_INTERVAL
 export CONFIG_BAD_WEALTH, CONFIG_BAD_TRANSFERS, CONFIG_BAD_TAX_BRACKETS, validate_config

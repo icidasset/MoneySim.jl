@@ -353,6 +353,59 @@ using EconoSimCore
         @test state.debt[2] == money(900)
     end
 
+    @testset "loan circuit" begin
+        # Growth mode: each balance accrues g; p is converted to bank reserves.
+        growth_cfg = SimConfig(
+            periods = 1,
+            population = PopulationConfig(count = 2),
+            wealth = WealthConfig(distribution = WealthDistribution.EQUAL,
+                                  equal_amount = money(1_000)),
+            money = MoneyConfig(model = MoneyModel.LOAN_CIRCUIT, interval = 1,
+                                interest_rate = permyriad(0.10)),
+            transactions = TransactionConfig(enabled = false),
+            loan_circuit = LoanCircuitConfig(enabled = true,
+                                             profit_rate = 0.05,
+                                             maturity = 1, mode = 0))
+        state = SimState(2)
+        results = ResultBuffers(1)
+        run_simulation!(growth_cfg, state, results)
+        @test state.wealth[1] == money(1_100)
+        @test state.wealth[2] == money(1_100)
+        @test state.debt[1] == money(1_150)
+        @test state.bank_reserve == money(100)
+        @test total_wealth(state) == money(2_200)
+
+        # Loan-rate mode: one cycle should grow the pool by the paper's formula.
+        function loan_cfg(periods, profit; seed = 42)
+            SimConfig(
+                periods = periods,
+                seed = seed,
+                population = PopulationConfig(count = 100),
+                wealth = WealthConfig(distribution = WealthDistribution.EQUAL,
+                                      equal_amount = money(100)),
+                money = MoneyConfig(model = MoneyModel.LOAN_CIRCUIT, interval = 1,
+                                    interest_rate = permyriad(0.15)),
+                transactions = TransactionConfig(enabled = true,
+                                                 transactions_per_step = 2_000,
+                                                 transfer_rate = 0.2,
+                                                 wealth_advantage = 0.0),
+                loan_circuit = LoanCircuitConfig(enabled = true,
+                                                 profit_rate = profit,
+                                                 maturity = 20, mode = 1))
+        end
+
+        one = run_simulation(loan_cfg(1, 0.008))
+        @test isapprox(one.total[1], 11_082.35; atol = 0.01)
+
+        stable = run_simulation(loan_cfg(500, 0.008))
+        @test stable.periods == 500
+        @test isapprox(stable.total[end], 720_271_164_192_546.0; rtol = 1e-9)
+
+        collapsed = run_simulation(loan_cfg(500, 0.009))
+        @test collapsed.periods == 193
+        @test isapprox(collapsed.total[end], 842_970.5606; rtol = 1e-9)
+    end
+
     @testset "determinism" begin
         function noisy(seed)
             cfg = SimConfig(

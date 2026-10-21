@@ -119,8 +119,174 @@ end
 
 Dispatch to the configured money model.
 """
+function _paper_interest(remaining::Money, rate::Int64)::Money
+    return Money(round(Int64, Float64(remaining.value) * Float64(rate) / 10000.0))
+end
+
+function _paper_loan(pool::Money, loan_rate::Int64)::Money
+    pool <= MONEY_ZERO && return MONEY_ZERO
+    rate = Float64(loan_rate) / 10000.0
+    rate >= 1.0 && return MONEY_ZERO
+    required = (Float64(pool.value) / 10000.0 / (1.0 - rate)) * rate
+    required = round(required, digits = 2)
+    required <= 0.0 && return MONEY_ZERO
+    return Money(round(Int64, required * 10000.0))
+end
+
+function _paper_installment(principal::Money, maturity::Int)
+    maturity = max(maturity, 1)
+    q, r = divrem(principal.value, maturity)
+    2r > maturity && return Money(q + 1)
+    2r == maturity && return Money(iseven(q) ? q : q + 1)
+    return Money(q)
+end
+
+function _resync_pro_rata!(state::SimState, old_total::Money, new_total::Money)
+    old_total == new_total && return nothing
+    n = alive_count(state)
+    n == 0 && return nothing
+
+    if new_total <= MONEY_ZERO
+        for i in eachindex(state.wealth)
+            state.wealth[i] = MONEY_ZERO
+        end
+        return nothing
+    end
+
+    if old_total <= MONEY_ZERO
+        share, remainder = split_amount(new_total, n)
+        given = 0
+        for i in eachindex(state.wealth)
+            is_alive(state, i) || continue
+            state.wealth[i] = share
+            if given < remainder.value
+                state.wealth[i] += Money(1)
+                given += 1
+            end
+        end
+        return nothing
+    end
+
+    total = MONEY_ZERO
+    for i in eachindex(state.wealth)
+        is_alive(state, i) || continue
+        scaled = Float64(state.wealth[i].value) * Float64(new_total.value) /
+                 Float64(old_total.value)
+        state.wealth[i] = Money(round(Int64, scaled))
+        total += state.wealth[i]
+    end
+
+    remainder = new_total.value - total.value
+    step = remainder > 0 ? Int64(1) : Int64(-1)
+    index = 1
+    while remainder != 0 && index <= state.n
+        if is_alive(state, index)
+            state.wealth[index] += Money(step)
+            remainder -= step
+        end
+        index += 1
+    end
+    return nothing
+end
+
+"""
+    loan_circuit_step!(state, money, loan, period)
+
+Paper-1 loan circuit. In growth mode every balance accrues interest and debt;
+in loan-rate mode the aggregate loan book is amortised and new loans are
+created from the remaining pool.
+"""
+function loan_circuit_step!(state::SimState, money::MoneyConfig,
+                            loan::LoanCircuitConfig, period::Int)
+    loan.enabled || return nothing
+
+    if loan.mode == 0
+        if !state.loan_initialized
+            for i in eachindex(state.wealth)
+                is_alive(state, i) || continue
+                state.debt[i] = max(state.wealth[i], MONEY_ZERO)
+            end
+            state.loan_initialized = true
+        end
+
+        if loan.profit_rate > 0
+            for i in eachindex(state.wealth)
+                (is_alive(state, i) && state.debt[i] > MONEY_ZERO) || continue
+                converted = apply_rate(state.debt[i], loan.profit_rate)
+                state.bank_reserve += converted
+                state.debt[i] += converted
+            end
+        end
+
+        if money.interest_rate > 0
+            for i in eachindex(state.wealth)
+                is_alive(state, i) || continue
+                created = apply_rate(state.wealth[i], money.interest_rate)
+                state.wealth[i] += created
+                state.debt[i] += created
+            end
+        end
+        return nothing
+    end
+
+    # Loan-rate mode: aggregate pool + amortisation book.
+    maturity = max(loan.maturity, 1)
+    pool = total_wealth(state)
+
+    if !state.loan_initialized
+        push!(state.loan_book_principal, pool)
+        push!(state.loan_book_cycles, maturity)
+        push!(state.loan_book_rate, loan.profit_rate)
+        push!(state.loan_book_installment, _paper_installment(pool, maturity))
+        state.loan_initialized = true
+    end
+
+    for l in eachindex(state.loan_book_principal)
+        remaining = state.loan_book_principal[l]
+        cycles = state.loan_book_cycles[l]
+        payment = cycles <= 1 ? remaining : state.loan_book_installment[l]
+        interest = _paper_interest(remaining, state.loan_book_rate[l])
+        pool -= payment + interest
+        state.loan_book_principal[l] = remaining - payment
+        state.loan_book_cycles[l] = cycles - 1
+    end
+
+    while !isempty(state.loan_book_cycles) && state.loan_book_cycles[1] <= 0
+        popfirst!(state.loan_book_principal)
+        popfirst!(state.loan_book_cycles)
+        popfirst!(state.loan_book_rate)
+        popfirst!(state.loan_book_installment)
+    end
+
+    new_loan = _paper_loan(pool, money.interest_rate)
+    if new_loan > MONEY_ZERO
+        pool += new_loan
+        push!(state.loan_book_principal, new_loan)
+        push!(state.loan_book_cycles, maturity)
+        push!(state.loan_book_rate, loan.profit_rate)
+        push!(state.loan_book_installment, _paper_installment(new_loan, maturity))
+    end
+
+    book_debt = MONEY_ZERO
+    for principal in state.loan_book_principal
+        book_debt += principal
+    end
+    state.bank_reserve = book_debt - pool
+
+    old_total = total_wealth(state)
+    state.loan_pool = pool
+    state.loan_collapsed = pool <= MONEY_ZERO
+    _resync_pro_rata!(state, old_total, pool)
+    return nothing
+end
+
+"""
+    step_money!(state, cfg, bank, loan, period)
+
+Dispatch to the configured money model.
+"""
 function step_money!(state::SimState, cfg::MoneyConfig, bank::BankConfig,
-                     period::Int)
+                     loan::LoanCircuitConfig, period::Int)
     if cfg.model === MoneyModel.SUMSY
         sumsy_step!(state, cfg, period)
     elseif cfg.model === MoneyModel.DEBT_BASED
@@ -129,8 +295,10 @@ function step_money!(state::SimState, cfg::MoneyConfig, bank::BankConfig,
         else
             debt_step!(state, cfg, period)
         end
+    elseif cfg.model === MoneyModel.LOAN_CIRCUIT
+        loan_circuit_step!(state, cfg, loan, period)
     end
     return nothing
 end
 
-export sumsy_step!, debt_step!, bank_step!, step_money!
+export sumsy_step!, debt_step!, bank_step!, loan_circuit_step!, step_money!
