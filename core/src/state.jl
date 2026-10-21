@@ -9,9 +9,14 @@ mutable struct SimState
     income::Vector{Money}
     expenses::Vector{Money}
     debt::Vector{Money}
+    tax_owed::Vector{Money}
     gi_eligible::Vector{UInt8}
     alive::Vector{UInt8}
     age_type::Vector{UInt8}
+    tax_slices::Int
+    tax_scale::Float64
+    government_debt::Money
+    gdp_factor::Float64
     scratch::Vector{Float64}
     income_scratch::Vector{Float64}
 end
@@ -31,9 +36,14 @@ function SimState(n::Integer = 0)
                     fill(MONEY_ZERO, count),
                     fill(MONEY_ZERO, count),
                     fill(MONEY_ZERO, count),
+                    fill(MONEY_ZERO, count),
                     gi_eligible,
                     alive,
                     age_type,
+                    0,
+                    1.0,
+                    MONEY_ZERO,
+                    1.0,
                     Vector{Float64}(undef, count),
                     Vector{Float64}(undef, count))
 end
@@ -56,6 +66,7 @@ function reset_state!(state::SimState, cfg::SimConfig)
         resize!(state.income, n)
         resize!(state.expenses, n)
         resize!(state.debt, n)
+        resize!(state.tax_owed, n)
         resize!(state.gi_eligible, n)
         resize!(state.alive, n)
         resize!(state.age_type, n)
@@ -67,6 +78,11 @@ function reset_state!(state::SimState, cfg::SimConfig)
     fill!(state.income, MONEY_ZERO)
     fill!(state.expenses, MONEY_ZERO)
     fill!(state.debt, MONEY_ZERO)
+    fill!(state.tax_owed, MONEY_ZERO)
+    state.tax_slices = 0
+    state.tax_scale = 1.0
+    state.government_debt = cfg.government.initial_debt
+    state.gdp_factor = 1.0
     for i in 1:n
         state.alive[i] = UInt8(1)
         state.age_type[i] = UInt8(0)
@@ -107,13 +123,16 @@ mutable struct ResultBuffers
     shares::Vector{Float64}
     income_shares::Vector{Float64}
     tax_collected::Vector{Float64}
+    tax_scale::Vector{Float64}
+    government_debt::Vector{Float64}
 end
 
 function ResultBuffers(count::Integer)
     n = Int(count)
     return ResultBuffers(fill(0.0, n), fill(0.0, n), fill(0.0, n),
                          fill(0.0, n), fill(0.0, n), fill(0.0, n),
-                         fill(0.0, n * 6), fill(0.0, n * 6), fill(0.0, n))
+                         fill(0.0, n * 6), fill(0.0, n * 6), fill(0.0, n),
+                         fill(1.0, n), fill(0.0, n))
 end
 
 """
@@ -133,13 +152,16 @@ struct SimResult
     shares::Vector{Float64}
     income_shares::Vector{Float64}
     tax_collected::Vector{Float64}
+    tax_scale::Vector{Float64}
+    government_debt::Vector{Float64}
 end
 
 function SimResult(buffers::ResultBuffers, periods::Int)
     return SimResult(periods, buffers.gini, buffers.mean, buffers.total,
                      buffers.min, buffers.max, buffers.income_gini,
                      buffers.shares, buffers.income_shares,
-                     buffers.tax_collected)
+                     buffers.tax_collected, buffers.tax_scale,
+                     buffers.government_debt)
 end
 
 export SimState, ResultBuffers, SimResult, reset_state!, is_alive, alive_count

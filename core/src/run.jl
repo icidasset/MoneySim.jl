@@ -18,6 +18,8 @@ function _resize_results!(results::ResultBuffers, count::Int)
     resize!(results.shares, count * 6)
     resize!(results.income_shares, count * 6)
     resize!(results.tax_collected, count)
+    resize!(results.tax_scale, count)
+    resize!(results.government_debt, count)
     return results
 end
 
@@ -36,14 +38,22 @@ function run_simulation!(cfg::SimConfig, state::SimState, results::ResultBuffers
     index = 0
 
     for period in 1:cfg.periods
-        population_step!(state, cfg.population, period)
-        step_money!(state, cfg.money, period)
-        transactions_step!(state, cfg.transactions, rng)
-        collected = tax_step!(state, cfg.tax, period)
+        population_step!(state, cfg.population, period, rng)
+        step_money!(state, cfg.money, cfg.bank, period)
+        adaptations_step!(state, cfg.adaptations, period)
+        transactions_step!(state, cfg.transactions, cfg.gdp, rng)
 
-        if mod(period, cfg.record_interval) == 0
+        record_row = mod(period, cfg.record_interval) == 0
+        if record_row
             index += 1
-            record_period!(results, state, index, collected)
+            record_income!(results, state, index)
+        end
+
+        collected = tax_step!(state, cfg.tax, period)
+        government_step!(state, cfg.government, cfg.tax, collected)
+
+        if record_row
+            record_wealth!(results, state, index, collected)
         end
     end
 

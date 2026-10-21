@@ -84,4 +84,41 @@ function transactions_step!(state::SimState, cfg::TransactionConfig, rng::Rng)
     return nothing
 end
 
+"""
+    gdp_transactions_step!(state, cfg, gdp, rng)
+
+Run yard-sale transfers until the period's volume target is met.
+"""
+function gdp_transactions_step!(state::SimState, cfg::TransactionConfig,
+                                gdp::GdpConfig, rng::Rng)
+    n = alive_count(state)
+    n > 0 || return nothing
+
+    if gdp.growth_permyriad != 0
+        state.gdp_factor *= 1.0 + Float64(gdp.growth_permyriad) / 120_000.0
+    end
+
+    target = Int64(round(Float64(gdp.per_capita.value) * Float64(n) * state.gdp_factor))
+    target <= 0 && return nothing
+
+    average = mean_wealth(state)
+    volume = Int64(0)
+    guard = n * 50
+    while volume < target && guard > 0
+        amount = yardsale_transfer!(state, cfg, rng, average)
+        volume += amount.value
+        guard -= 1
+    end
+    return nothing
+end
+
+function transactions_step!(state::SimState, cfg::TransactionConfig,
+                            gdp::GdpConfig, rng::Rng)
+    if gdp.enabled
+        return gdp_transactions_step!(state, cfg, gdp, rng)
+    end
+    return transactions_step!(state, cfg, rng)
+end
+
 export BROKE_THRESHOLD, coinflip_prob, yardsale_transfer!, transactions_step!
+export gdp_transactions_step!

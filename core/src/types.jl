@@ -96,15 +96,113 @@ struct TaxConfig
     interval::Int
     recipient::TaxRecipient.Kind
     recipient_actor::Int
+    brackets::Vector{Money}
+    bracket_rates::Vector{Int64}
+    target_revenue::Money
+    scale_to_target::Bool
 end
 
 function TaxConfig(; kind::TaxKind.Kind = TaxKind.NONE,
                    rate::Real = 0.0,
                    interval::Integer = 0,
                    recipient::TaxRecipient.Kind = TaxRecipient.EVERYONE,
-                   recipient_actor::Integer = 0)
+                   recipient_actor::Integer = 0,
+                   brackets::Vector{Money} = Money[],
+                   bracket_rates::Vector{Int64} = Int64[],
+                   target_revenue::Money = MONEY_ZERO,
+                   scale_to_target::Bool = false)
     return TaxConfig(kind, permyriad(rate), Int(interval), recipient,
-                     Int(recipient_actor))
+                     Int(recipient_actor), brackets, bracket_rates,
+                     target_revenue, scale_to_target)
+end
+
+"""
+    GovernmentConfig
+
+Optional government sector. When `deficit_spending` is on, a shortfall between
+`expenses` and the tax collected is created as money and added to public debt.
+"""
+struct GovernmentConfig
+    enabled::Bool
+    expenses::Money
+    deficit_spending::Bool
+    initial_debt::Money
+end
+
+function GovernmentConfig(; enabled::Bool = false,
+                         expenses::Money = MONEY_ZERO,
+                         deficit_spending::Bool = false,
+                         initial_debt::Money = MONEY_ZERO)
+    return GovernmentConfig(enabled, expenses, deficit_spending, initial_debt)
+end
+
+"""
+    GdpConfig
+
+GDP sets a per-step transaction-volume target. It is not money and is not
+booked as income. `growth_permyriad` is a yearly rate, compounded monthly.
+"""
+struct GdpConfig
+    enabled::Bool
+    per_capita::Money
+    growth_permyriad::Int64
+    interval::Int
+end
+
+function GdpConfig(; enabled::Bool = false,
+                   per_capita::Money = MONEY_ZERO,
+                   growth_permyriad::Integer = 0,
+                   interval::Integer = 1)
+    return GdpConfig(enabled, per_capita, Int64(growth_permyriad), Int(interval))
+end
+
+"""
+    AdaptationConfig
+
+Money injection and destruction. Amounts are totals per interval, split
+ equally among alive actors.
+"""
+struct AdaptationConfig
+    inject_enabled::Bool
+    inject_amount::Money
+    inject_interval::Int
+    destroy_enabled::Bool
+    destroy_amount::Money
+    destroy_interval::Int
+end
+
+function AdaptationConfig(; inject_enabled::Bool = false,
+                          inject_amount::Money = MONEY_ZERO,
+                          inject_interval::Integer = 1,
+                          destroy_enabled::Bool = false,
+                          destroy_amount::Money = MONEY_ZERO,
+                          destroy_interval::Integer = 1)
+    return AdaptationConfig(inject_enabled, inject_amount, Int(inject_interval),
+                            destroy_enabled, destroy_amount, Int(destroy_interval))
+end
+
+"""
+    BankConfig
+
+A designated bank actor. Each period it earns interest on outstanding loans,
+receives principal repayment (destroying money), and lends new money to the
+poorest actors (creating money).
+"""
+struct BankConfig
+    enabled::Bool
+    actor_index::Int
+    repayment_rate::Int64
+    lending_amount::Money
+    lending_targets::Int
+end
+
+function BankConfig(; enabled::Bool = false,
+                    actor_index::Integer = 0,
+                    repayment_rate::Real = 0.0,
+                    lending_amount::Money = MONEY_ZERO,
+                    lending_targets::Integer = 0)
+    return BankConfig(enabled, Int(actor_index), permyriad(repayment_rate),
+                      lending_amount, Int(lending_targets))
 end
 
 """
@@ -134,11 +232,32 @@ eligible", otherwise a 1/0 vector of length `count`.
 struct PopulationConfig
     count::Int
     gi_eligible::Vector{UInt8}
+    birth_rate::Int64
+    death_rate::Int64
+    aging_interval::Int
+    aging_rate::Int64
+    birth_wealth::Money
+    gi_child::Bool
+    gi_adult::Bool
+    gi_elder::Bool
+    typed_gi::Bool
 end
 
 function PopulationConfig(; count::Integer = 100,
-                          gi_eligible::Vector{UInt8} = UInt8[])
-    return PopulationConfig(Int(count), gi_eligible)
+                          gi_eligible::Vector{UInt8} = UInt8[],
+                          birth_rate::Real = 0.0,
+                          death_rate::Real = 0.0,
+                          aging_interval::Integer = 0,
+                          aging_rate::Real = 0.0,
+                          birth_wealth::Money = MONEY_ZERO,
+                          gi_child::Bool = true,
+                          gi_adult::Bool = true,
+                          gi_elder::Bool = true,
+                          typed_gi::Bool = false)
+    return PopulationConfig(Int(count), gi_eligible,
+                            permyriad(birth_rate), permyriad(death_rate),
+                            Int(aging_interval), permyriad(aging_rate),
+                            birth_wealth, gi_child, gi_adult, gi_elder, typed_gi)
 end
 
 """
@@ -156,6 +275,10 @@ struct SimConfig
     transactions::TransactionConfig
     tax::TaxConfig
     population::PopulationConfig
+    government::GovernmentConfig
+    gdp::GdpConfig
+    adaptations::AdaptationConfig
+    bank::BankConfig
 end
 
 function SimConfig(; periods::Integer = 100,
@@ -165,9 +288,14 @@ function SimConfig(; periods::Integer = 100,
                    wealth::WealthConfig = WealthConfig(),
                    transactions::TransactionConfig = TransactionConfig(),
                    tax::TaxConfig = TaxConfig(),
-                   population::PopulationConfig = PopulationConfig())
+                   population::PopulationConfig = PopulationConfig(),
+                   government::GovernmentConfig = GovernmentConfig(),
+                   gdp::GdpConfig = GdpConfig(),
+                   adaptations::AdaptationConfig = AdaptationConfig(),
+                   bank::BankConfig = BankConfig())
     return SimConfig(Int(periods), UInt64(seed), Int(record_interval), money,
-                     wealth, transactions, tax, population)
+                     wealth, transactions, tax, population, government, gdp,
+                     adaptations, bank)
 end
 
 const CONFIG_OK = Int32(0)
@@ -178,6 +306,7 @@ const CONFIG_BAD_MONEY_INTERVAL = Int32(4)
 const CONFIG_BAD_TAX_INTERVAL = Int32(5)
 const CONFIG_BAD_WEALTH = Int32(6)
 const CONFIG_BAD_TRANSFERS = Int32(7)
+const CONFIG_BAD_TAX_BRACKETS = Int32(8)
 
 """
     validate_config(cfg) -> Int32
@@ -198,6 +327,11 @@ function validate_config(cfg::SimConfig)::Int32
     if cfg.transactions.enabled && cfg.transactions.transactions_per_step < 0
         return CONFIG_BAD_TRANSFERS
     end
+    if cfg.tax.kind === TaxKind.INCOME
+        (isempty(cfg.tax.bracket_rates) ||
+         length(cfg.tax.brackets) != length(cfg.tax.bracket_rates)) &&
+            return CONFIG_BAD_TAX_BRACKETS
+    end
     if !isempty(cfg.population.gi_eligible) &&
        length(cfg.population.gi_eligible) != cfg.population.count
         return CONFIG_BAD_POPULATION
@@ -206,7 +340,8 @@ function validate_config(cfg::SimConfig)::Int32
 end
 
 export MoneyModel, TaxKind, TaxRecipient, WealthDistribution
-export MoneyConfig, TransactionConfig, TaxConfig, WealthConfig, PopulationConfig, SimConfig
+export MoneyConfig, TransactionConfig, TaxConfig, WealthConfig, PopulationConfig
+export GovernmentConfig, GdpConfig, AdaptationConfig, BankConfig, SimConfig
 export CONFIG_OK, CONFIG_BAD_PERIODS, CONFIG_BAD_RECORD_INTERVAL
 export CONFIG_BAD_POPULATION, CONFIG_BAD_MONEY_INTERVAL, CONFIG_BAD_TAX_INTERVAL
-export CONFIG_BAD_WEALTH, CONFIG_BAD_TRANSFERS, validate_config
+export CONFIG_BAD_WEALTH, CONFIG_BAD_TRANSFERS, CONFIG_BAD_TAX_BRACKETS, validate_config

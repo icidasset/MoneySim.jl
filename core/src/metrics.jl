@@ -80,25 +80,64 @@ function _alive_values!(scratch::Vector{Float64}, source::Vector{Money},
 end
 
 """
-    record_period!(results, state, index, collected)
+    record_income!(results, state, index)
 
-Record wealth and income aggregates for one output row.
+Record the current income-window distribution. Call this before a tax
+assessment resets `state.income`.
 """
-function record_period!(results::ResultBuffers, state::SimState, index::Int,
+function record_income!(results::ResultBuffers, state::SimState, index::Int)
+    m = alive_count(state)
+    base = (index - 1) * 6
+
+    if m == 0
+        results.income_gini[index] = -1.0
+        for k in 1:6
+            results.income_shares[base + k] = -1.0
+        end
+        return results
+    end
+
+    income_values = Vector{Float64}(undef, m)
+    _alive_values!(income_values, state.income, state)
+    sort!(income_values)
+
+    if sum(income_values) <= 0.0
+        results.income_gini[index] = -1.0
+        for k in 1:6
+            results.income_shares[base + k] = -1.0
+        end
+    else
+        results.income_gini[index] = gini_of_sorted(income_values)
+        income_shares = cumulative_shares(income_values)
+        for k in 1:6
+            results.income_shares[base + k] = income_shares[k]
+        end
+    end
+    return results
+end
+
+"""
+    record_wealth!(results, state, index, collected)
+
+Record wealth aggregates and the period's tax / public-debt ledger.
+"""
+function record_wealth!(results::ResultBuffers, state::SimState, index::Int,
                         collected::Money)
     m = alive_count(state)
+    base = (index - 1) * 6
+
+    results.tax_collected[index] = currency(collected)
+    results.tax_scale[index] = state.tax_scale
+    results.government_debt[index] = currency(state.government_debt)
+
     if m == 0
         results.gini[index] = 0.0
         results.mean[index] = 0.0
         results.total[index] = 0.0
         results.min[index] = 0.0
         results.max[index] = 0.0
-        results.income_gini[index] = -1.0
-        results.tax_collected[index] = currency(collected)
-        base = (index - 1) * 6
         for k in 1:6
             results.shares[base + k] = 0.0
-            results.income_shares[base + k] = -1.0
         end
         return results
     end
@@ -114,32 +153,24 @@ function record_period!(results::ResultBuffers, state::SimState, index::Int,
     results.max[index] = wealth_values[end] / SCALE
 
     shares = cumulative_shares(wealth_values)
-    base = (index - 1) * 6
     for k in 1:6
         results.shares[base + k] = shares[k]
     end
+    return results
+end
 
-    income_values = Vector{Float64}(undef, m)
-    _alive_values!(income_values, state.income, state)
-    sort!(income_values)
+"""
+    record_period!(results, state, index, collected)
 
-    income_base = (index - 1) * 6
-    if sum(income_values) <= 0.0
-        results.income_gini[index] = -1.0
-        for k in 1:6
-            results.income_shares[income_base + k] = -1.0
-        end
-    else
-        results.income_gini[index] = gini_of_sorted(income_values)
-        income_shares = cumulative_shares(income_values)
-        for k in 1:6
-            results.income_shares[income_base + k] = income_shares[k]
-        end
-    end
-
-    results.tax_collected[index] = currency(collected)
+Record both income and wealth metrics at the current state. Used by the
+custom-run ABI hook.
+"""
+function record_period!(results::ResultBuffers, state::SimState, index::Int,
+                        collected::Money)
+    record_income!(results, state, index)
+    record_wealth!(results, state, index, collected)
     return results
 end
 
 export SHARE_FRACTIONS, total_wealth, mean_wealth, minmax_wealth
-export gini_of_sorted, cumulative_shares, record_period!
+export gini_of_sorted, cumulative_shares, record_income!, record_wealth!, record_period!

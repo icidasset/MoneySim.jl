@@ -74,6 +74,67 @@ using EconoSimCore
         @test result.gini[end] == 0.0
     end
 
+    @testset "income tax" begin
+        state = SimState(3)
+        state.wealth[1] = money(1_000)
+        state.wealth[2] = money(1_000)
+        state.wealth[3] = money(1_000)
+        state.income[1] = money(1_000)
+        state.income[2] = money(2_000)
+        state.income[3] = money(5_000)
+
+        brackets = [money(1_000), money(5_000), typemax(Money)]
+        cfg = TaxConfig(kind = TaxKind.INCOME, interval = 1,
+                        recipient = TaxRecipient.DESTROY,
+                        brackets = brackets,
+                        bracket_rates = Int64[1_000, 2_000, 3_000])
+
+        collected = tax_step_income!(state, cfg, 1)
+        @test collected == money(1_300)
+        @test state.income == fill(zero(Money), 3)
+        @test state.wealth[1] == money(900)
+        @test state.wealth[2] == money(700)
+        @test state.wealth[3] == money(100)
+        @test state.tax_scale == 1.0
+
+        state = SimState(3)
+        state.wealth .= money(1_000)
+        state.income[1] = money(1_000)
+        state.income[2] = money(2_000)
+        state.income[3] = money(5_000)
+        cfg = TaxConfig(kind = TaxKind.INCOME, interval = 1,
+                        recipient = TaxRecipient.DESTROY,
+                        brackets = brackets,
+                        bracket_rates = Int64[1_000, 2_000, 3_000],
+                        target_revenue = money(650),
+                        scale_to_target = true)
+        collected = tax_step_income!(state, cfg, 1)
+        @test collected == money(650)
+        @test isapprox(state.tax_scale, 0.5; atol = 1e-9)
+    end
+
+    @testset "government deficit" begin
+        state = SimState(10)
+        state.wealth .= money(1_000)
+        tax = TaxConfig(kind = TaxKind.NONE)
+
+        government = GovernmentConfig(enabled = true,
+                                      expenses = money(1_500),
+                                      deficit_spending = true)
+        government_step!(state, government, tax, MONEY_ZERO)
+        @test state.government_debt == money(1_500)
+        @test total_wealth(state) == money(11_500)
+
+        state = SimState(10)
+        state.wealth .= money(1_000)
+        government = GovernmentConfig(enabled = true,
+                                      expenses = money(1_500),
+                                      deficit_spending = false)
+        government_step!(state, government, tax, money(1_000))
+        @test state.government_debt == MONEY_ZERO
+        @test total_wealth(state) == money(10_000)
+    end
+
     @testset "yard sale conserves money" begin
         cfg = SimConfig(
             periods = 100,
@@ -96,6 +157,91 @@ using EconoSimCore
         @test isapprox(result.total[end], 50_000.0; rtol = 1e-9)
         @test result.gini[end] > 0.0
         @test result.income_gini[end] >= 0.0
+    end
+
+    @testset "demographics" begin
+        function run_state(population; periods = 1)
+            cfg = SimConfig(
+                periods = periods,
+                population = population,
+                wealth = WealthConfig(distribution = WealthDistribution.EQUAL,
+                                      equal_amount = money(100)),
+                money = MoneyConfig(model = MoneyModel.SUMSY, interval = 1,
+                                    guaranteed_income = money(0),
+                                    demurrage = make_tiers(0.0)),
+                transactions = TransactionConfig(enabled = false))
+            state = SimState(population.count)
+            results = ResultBuffers(periods)
+            run_simulation!(cfg, state, results)
+            return state, results
+        end
+
+        births, birth_results = run_state(PopulationConfig(
+            count = 10, birth_rate = 0.1, birth_wealth = money(50), typed_gi = true))
+        @test births.n == 11
+        @test alive_count(births) == 11
+        @test births.wealth[11] == money(50)
+        @test birth_results.total[end] == 1_050.0
+
+        deaths, death_results = run_state(PopulationConfig(count = 10, death_rate = 0.1))
+        @test alive_count(deaths) == 9
+        @test death_results.total[end] == 900.0
+
+        aged, _ = run_state(PopulationConfig(
+            count = 10, aging_interval = 1, aging_rate = 1.0,
+            typed_gi = true, gi_child = false, gi_adult = true, gi_elder = true))
+        @test all(==(UInt8(1)), aged.age_type)
+        @test all(==(UInt8(1)), aged.gi_eligible)
+    end
+
+    @testset "adaptations" begin
+        injected = run_simulation(SimConfig(
+            periods = 1,
+            population = PopulationConfig(count = 10),
+            wealth = WealthConfig(distribution = WealthDistribution.EQUAL,
+                                  equal_amount = money(100)),
+            money = MoneyConfig(model = MoneyModel.SUMSY, interval = 1,
+                                guaranteed_income = money(0),
+                                demurrage = make_tiers(0.0)),
+            transactions = TransactionConfig(enabled = false),
+            adaptations = AdaptationConfig(inject_enabled = true,
+                                           inject_amount = money(1_000),
+                                           inject_interval = 1)))
+        @test injected.total[end] == 2_000.0
+
+        destroyed = run_simulation(SimConfig(
+            periods = 1,
+            population = PopulationConfig(count = 10),
+            wealth = WealthConfig(distribution = WealthDistribution.EQUAL,
+                                  equal_amount = money(1_000)),
+            money = MoneyConfig(model = MoneyModel.SUMSY, interval = 1,
+                                guaranteed_income = money(0),
+                                demurrage = make_tiers(0.0)),
+            transactions = TransactionConfig(enabled = false),
+            adaptations = AdaptationConfig(destroy_enabled = true,
+                                           destroy_amount = money(1_000),
+                                           destroy_interval = 1)))
+        @test destroyed.total[end] == 9_000.0
+    end
+
+    @testset "GDP volume target" begin
+        cfg = SimConfig(
+            periods = 1,
+            population = PopulationConfig(count = 10),
+            wealth = WealthConfig(distribution = WealthDistribution.EQUAL,
+                                  equal_amount = money(1_000)),
+            money = MoneyConfig(model = MoneyModel.SUMSY, interval = 1,
+                                guaranteed_income = money(0),
+                                demurrage = make_tiers(0.0)),
+            transactions = TransactionConfig(enabled = false,
+                                             transfer_rate = 0.2),
+            gdp = GdpConfig(enabled = true, per_capita = money(50)))
+
+        state = SimState(cfg.population.count)
+        results = ResultBuffers(1)
+        run_simulation!(cfg, state, results)
+        @test sum(state.income) >= money(500)
+        @test total_wealth(state) == money(10_000)
     end
 
     @testset "wealth tax" begin
@@ -161,6 +307,50 @@ using EconoSimCore
             tax = TaxConfig(kind = TaxKind.NONE)))
         @test concentrated.total[end] == 1_000.0
         @test isapprox(concentrated.gini[end], 0.9; atol = 1e-9)
+    end
+
+    @testset "bank" begin
+        cfg = SimConfig(
+            periods = 1,
+            population = PopulationConfig(count = 10),
+            wealth = WealthConfig(distribution = WealthDistribution.EQUAL,
+                                  equal_amount = money(1_000)),
+            money = MoneyConfig(model = MoneyModel.DEBT_BASED, interval = 1,
+                                guaranteed_income = money(0),
+                                demurrage = make_tiers(0.0), interest_rate = 0),
+            transactions = TransactionConfig(enabled = false),
+            bank = BankConfig(enabled = true, actor_index = 1,
+                              lending_amount = money(1_000),
+                              lending_targets = 2))
+        state = SimState(10)
+        results = ResultBuffers(1)
+        run_simulation!(cfg, state, results)
+        @test state.wealth[2] == money(1_500)
+        @test state.wealth[3] == money(1_500)
+        @test state.debt[2] == money(500)
+        @test state.debt[3] == money(500)
+        @test total_wealth(state) == money(11_000)
+
+        state = SimState(2)
+        state.wealth .= money(1_000)
+        state.debt[2] = money(1_000)
+        money_cfg = MoneyConfig(model = MoneyModel.DEBT_BASED, interval = 1,
+                                interest_rate = permyriad(0.01))
+        bank = BankConfig(enabled = true, actor_index = 1)
+        bank_step!(state, money_cfg, bank)
+        @test state.wealth[1] == money(1_010)
+        @test state.wealth[2] == money(990)
+
+        state = SimState(2)
+        state.wealth .= money(1_000)
+        state.debt[2] = money(1_000)
+        bank = BankConfig(enabled = true, actor_index = 1,
+                          repayment_rate = 0.1)
+        repay_cfg = MoneyConfig(model = MoneyModel.DEBT_BASED, interval = 1,
+                                interest_rate = 0)
+        bank_step!(state, repay_cfg, bank)
+        @test state.wealth[2] == money(900)
+        @test state.debt[2] == money(900)
     end
 
     @testset "determinism" begin
