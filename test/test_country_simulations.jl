@@ -30,7 +30,7 @@ using DataFrames
                 # @test row[:deposit] - row[:income] + row[:expenses] + row[:paid_tax] + row[:tax_share] == deposit
 
                 if income != 0
-                    @test Currency(row[:paid_tax] / income) == Currency(MoneySim.calculate_flat_gdp_tax(BE))
+                    @test Currency(row[:paid_tax] / income) == Currency(MoneySim.calculate_flat_gdp_income_tax(BE))
                 end
             end
 
