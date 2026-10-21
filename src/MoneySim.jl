@@ -4,7 +4,6 @@ module MoneySim
 export TAX_TYPE, INCOME_TAX, DEMURRAGE_TAX, VAT_ONLY
 
 using EconoSim
-using Infiltrator
 
 include("utils.jl")
 export BROKE_THRESHOLD
@@ -121,6 +120,7 @@ export Taxes, T_NO_TAX, T_INCOME_TAX, T_DEM_TAX, T_GDP_FLAT_TAX, T_VAT_ONLY
 export MONTH, YEAR
 export Country, BE, NL, TEST
 export simulate_country
+export country_simulation_setup
 export average_wealth
 
 end

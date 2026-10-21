@@ -160,7 +160,7 @@ function gdp_growth(model::ABM, period::Int, gdp_growth_per_year::Real)
     return gdp_growth_per_year / 12 * period
 end
 
-function simulate_country(country::Country;
+function country_simulation_setup(country::Country;
                             sim_length = 100 * YEAR,
                             data_collection_interval::Int = YEAR,
                             lock_random_generator::Bool = true,
@@ -395,11 +395,29 @@ function simulate_country(country::Country;
                                         model_data_collectors = model_data_collectors,
                                         post_processing! = post_process_data!)
 
-    run_simulation(model,
-                    sim_params = sim_params,
-                    population_params = population_params,
-                    monetary_params = monetary_params,
-                    transaction_params = transaction_params,
-                    tax_scheme = tax_scheme,
-                    data_handler = data_handler)
+    return (sim_params = sim_params,
+            model = model,
+            population_params = population_params,
+            monetary_params = monetary_params,
+            transaction_params = transaction_params,
+            tax_scheme = tax_scheme,
+            data_handler = data_handler)
+end
+
+"""
+    simulate_country(country::Country; kwargs...)
+
+Build the country simulation with `country_simulation_setup` and run it.
+"""
+function simulate_country(country::Country; kwargs...)
+    setup = country_simulation_setup(country; kwargs...)
+    isnothing(setup) && return nothing
+
+    return run_simulation(setup.model,
+                          sim_params = setup.sim_params,
+                          population_params = setup.population_params,
+                          monetary_params = setup.monetary_params,
+                          transaction_params = setup.transaction_params,
+                          tax_scheme = setup.tax_scheme,
+                          data_handler = setup.data_handler)
 end

@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "1cb2718908c42516291d5cadb2ef97832b31364c"
+project_hash = "5208abeaa4dd5d2da9427f2e377daebd5841dff7"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -692,12 +692,6 @@ version = "1.34.4"
     PythonCall = "6099a3de-0909-46bc-b1f4-468b9a2dfc0d"
     Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
 
-[[deps.Infiltrator]]
-deps = ["InteractiveUtils", "Markdown", "REPL", "UUIDs"]
-git-tree-sha1 = "0330ef9ac27dc069bf97fa5ab1a4391be4fcc4f6"
-uuid = "5903a43b-9cc3-4c30-8d17-598619ec4e9b"
-version = "1.9.11"
-
 [[deps.Inflate]]
 git-tree-sha1 = "d1b1b796e47d94588b3757fe84fbf65a5ec4a80d"
 uuid = "d25df0c9-e2be-5dd7-82c8-3ad0b3e990b9"
@@ -1060,7 +1054,7 @@ uuid = "78c3b35d-d492-501b-9361-3d52fe80e533"
 version = "0.8.1"
 
 [[deps.MoneySim]]
-deps = ["Agents", "BenchmarkTools", "CSV", "DataFrames", "DataFramesMeta", "DataStructures", "Distributions", "EconoSim", "FixedPointDecimals", "FunctionWrappers", "IJulia", "Infiltrator", "Intervals", "Lazy", "PlotlyJS", "Plots", "Pluto", "Profile", "QuadGK", "Quarto", "Random", "Revise", "Statistics", "StatsPlots", "Test", "Todo", "WebIO"]
+deps = ["Agents", "BenchmarkTools", "CSV", "DataFrames", "DataFramesMeta", "DataStructures", "Distributions", "EconoSim", "FixedPointDecimals", "FunctionWrappers", "IJulia", "Intervals", "PlotlyJS", "Plots", "Pluto", "Profile", "QuadGK", "Quarto", "Random", "Statistics", "StatsPlots", "Test", "WebIO"]
 path = "."
 uuid = "2c321c3e-df22-4fe8-8a60-238a5a5a30c9"
 version = "0.1.0"
