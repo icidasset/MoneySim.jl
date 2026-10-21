@@ -19,6 +19,7 @@ This is Phase 4a of the wasm-ready core plan. The canonical plan lives in
 | `src/money_models.jl` | SUMSY (GI + demurrage), homogeneous debt-based interest, post-Keynesian bank, paper-1 loan circuit |
 | `src/population.jl` | Fixed population, births/deaths/aging, typed GI eligibility |
 | `src/adaptations.jl` | Money injection and destruction |
+| `src/countries.jl` | Typed country datasets, Belgium 2023, unequal-wealth distribution, `country_config` derivation |
 | `src/run.jl` | `run_simulation` / `run_simulation!` |
 
 ## Test
@@ -29,10 +30,12 @@ julia --project=core -e 'using Pkg; Pkg.test()'
 
 ## Status
 
-- 84 native tests pass.
+- 93 native tests pass.
 - Phase 4b is complete for the current sim.wasm surface: the paper-1 loan
   circuit (growth and loan-rate modes, bank reserves, collapse rule) is
   implemented and matches the stable/collapse reference totals.
+- Phase 5a: the Belgium dataset and `country_config` derivation live here; the
+  TypeScript country preset is generated from `belgium()`.
 - The full minimal path runs under WasmTarget through `sim.wasm/wasm/`; the
   final Gini is bit-identical to native (`0.37746266868656675`).
 

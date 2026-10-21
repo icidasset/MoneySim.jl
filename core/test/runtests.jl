@@ -406,6 +406,29 @@ using EconoSimCore
         @test isapprox(collapsed.total[end], 842_970.5606; rtol = 1e-9)
     end
 
+    @testset "countries" begin
+        be = belgium()
+        @test population_total(be) == 11_697_556
+        @test money_per_capita(be) == div(be.money_stock, 11_697_556)
+        @test gdp_per_capita(be) == div(be.government.gdp, 11_697_556)
+
+        values = unequal_wealth(be, 1_000)
+        @test length(values) == 1_000
+        @test maximum(values) > minimum(values)
+        @test isapprox(currency(sum(values)),
+                       currency(money_per_capita(be)) * 1_000; rtol = 1e-6)
+
+        cfg = country_config(be; actors = 200, periods = 12,
+                             wealth_distribution = WealthDistribution.CUSTOM,
+                             tax_kind = TaxKind.NONE,
+                             government_enabled = false,
+                             record_interval = 12)
+        result = run_simulation(cfg)
+        @test result.periods == 1
+        @test isfinite(result.gini[1])
+        @test result.total[1] > 0
+    end
+
     @testset "determinism" begin
         function noisy(seed)
             cfg = SimConfig(

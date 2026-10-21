@@ -1,0 +1,237 @@
+# Country datasets and derivation rules.
+#
+# The values mirror MoneySim's `data_be.jl` / `country.ts`. Keeping the dataset
+# upstream lets the wasm and native frontends derive the same config.
+#
+# This file is native-only for now: it is not reachable from the wasm ABI until
+# the country entry points are added.
+
+struct CountryPopulation
+    min18::Int
+    age18to64::Int
+    age65plus::Int
+end
+
+struct CountryInequality
+    top_0_1::Money
+    top_1::Money
+    top_10::Money
+    high_middle_40::Money
+    low_middle_40::Money
+    bottom_10::Money
+    bottom_1::Money
+    bottom_0_1::Money
+end
+
+struct CountryCivilian
+    avg_gross_income::Money
+    avg_cost_of_living::Money
+    avg_rent::Money
+    wealth::CountryInequality
+    income::CountryInequality
+end
+
+struct CountryGovernment
+    gdp::Money
+    debt::Money
+    expenses::Money
+    interest_cost::Money
+    pension_cost::Money
+    unemployment_cost::Money
+    income::Money
+    vat_income::Money
+    tax_brackets::Vector{Money}
+    tax_rates::Vector{Int64}
+end
+
+struct CountrySumsy
+    flat_gi::Money
+    demurrage_free::Money
+    interval::Int
+end
+
+struct CountryData
+    name::String
+    year::Int
+    money_stock::Money
+    population::CountryPopulation
+    civilian::CountryCivilian
+    government::CountryGovernment
+    sumsy::CountrySumsy
+end
+
+population_total(country::CountryData) =
+    country.population.min18 + country.population.age18to64 +
+    country.population.age65plus
+
+money_per_capita(country::CountryData) =
+    div(country.money_stock, population_total(country))
+
+gdp_per_capita(country::CountryData) =
+    div(country.government.gdp, population_total(country))
+
+"""    belgium() -> CountryData
+
+Belgium 2023, the paper-3 calibration dataset.
+"""
+function belgium()
+    wealth = CountryInequality(
+        money(8_938_739.974), money(3_811_778.9713),
+        money(1_328_577.6418), money(255_669.2208),
+        money(48_963.733), money(-768.0704),
+        money(-42_489.2532), money(-42_489.2532))
+
+    income = CountryInequality(
+        money(929_099.2277 / 12), money(352_553.0531 / 12),
+        money(133_618.6312 / 12), money(47_402.7566 / 12),
+        money(20_266.3001 / 12), money(1_428.5148 / 12),
+        money(0), money(0))
+
+    government = CountryGovernment(
+        money(596_321_000_000 / 12),
+        money(614_991_000_000),
+        money(317_595_000_000 / 12),
+        money(11_926_000_000 / 12),
+        money(62_900_000_000 / 12),
+        money(6_400_000_000 / 12),
+        money(292_624_000_000 / 12),
+        money(37_828_100_000 / 12),
+        [money(10_190), money(15_200), money(26_830), money(46_440)],
+        Int64[2_500, 4_000, 4_500, 5_000, 5_000])
+
+    return CountryData(
+        "belgium", 2023, money(674_000_000_000),
+        CountryPopulation(1_314_555 + 274_738 + 747_040,
+                          4_029_828 + 804_889 + 2_215_697,
+                          1_430_423 + 161_548 + 718_838),
+        CountryCivilian(money(4_076), money(927.8), money(1_007), wealth, income),
+        government,
+        CountrySumsy(money(1_246.05), money(0), 1))
+end
+
+"""
+    unequal_wealth(country, actors) -> Vector{Money}
+
+Distribute the country's wealth percentiles across `actors`, scaled so the
+per-capita wealth equals `money_per_capita(country)`.
+"""
+function unequal_wealth(country::CountryData, actors::Int)
+    data = country.civilian.wealth
+    weighted = money(0)
+    weighted += div(data.top_10, 10)
+    weighted += div(data.high_middle_40 * 4, 10)
+    weighted += div(data.low_middle_40 * 4, 10)
+    weighted += div(data.bottom_10, 10)
+    target = money_per_capita(country)
+
+    scale = weighted == MONEY_ZERO ? 0.0 :
+        Float64(target.value) / Float64(weighted.value)
+
+    function scaled(value::Money)
+        return Money(round(Int64, Float64(value.value) * scale))
+    end
+
+    bottom_count = max(1, round(Int, actors * 0.10))
+    low_count = max(1, round(Int, actors * 0.40))
+    high_count = max(1, round(Int, actors * 0.40))
+    top_count = max(0, actors - bottom_count - low_count - high_count)
+
+    values = Vector{Money}(undef, actors)
+    index = 1
+    for _ in 1:bottom_count
+        values[index] = scaled(data.bottom_10)
+        index += 1
+    end
+    for _ in 1:low_count
+        values[index] = scaled(data.low_middle_40)
+        index += 1
+    end
+    for _ in 1:high_count
+        values[index] = scaled(data.high_middle_40)
+        index += 1
+    end
+    for _ in 1:top_count
+        values[index] = scaled(data.top_10)
+        index += 1
+    end
+    return values
+end
+
+"""
+    country_config(country; kwargs...) -> SimConfig
+
+Derive a simulation config from a country dataset. Defaults follow the paper-3
+setup: monthly steps, yearly recording, SUMSY with the country's flat GI and
+demurrage, a GDP volume target, progressive income tax, and the government
+sector. Override any group through the keyword arguments.
+"""
+function country_config(country::CountryData;
+                        actors::Integer = 5_000,
+                        periods::Integer = 120,
+                        seed::Integer = 42,
+                        wealth_distribution::WealthDistribution.Kind =
+                            WealthDistribution.EQUAL,
+                        tax_kind::TaxKind.Kind = TaxKind.INCOME,
+                        tax_interval::Integer = 12,
+                        target_revenue::Union{Nothing, Money} = nothing,
+                        deficit_spending::Bool = false,
+                        government_enabled::Bool = true,
+                        gdp_growth_per_year::Real = 0.0,
+                        record_interval::Integer = 12)
+    count = Int(actors)
+    per_capita = money_per_capita(country)
+
+    wealth = if wealth_distribution === WealthDistribution.CUSTOM
+        WealthConfig(WealthDistribution.CUSTOM, MONEY_ZERO,
+                     unequal_wealth(country, count))
+    else
+        WealthConfig(WealthDistribution.EQUAL, per_capita, Money[])
+    end
+
+    demurrage_rate = Float64(country.sumsy.flat_gi.value) /
+                     Float64(per_capita.value)
+    money = MoneyConfig(MoneyModel.SUMSY, country.sumsy.flat_gi,
+                        make_tiers(demurrage_rate), country.sumsy.demurrage_free,
+                        country.sumsy.interval, Int64(0))
+
+    transactions = TransactionConfig(false, 0, permyriad(0.2), MONEY_ZERO,
+                                     0.0, false)
+
+    tax = if tax_kind === TaxKind.INCOME
+        rates = copy(country.government.tax_rates)
+        brackets = Vector{Money}(undef, length(country.government.tax_brackets) + 1)
+        for i in eachindex(country.government.tax_brackets)
+            brackets[i] = country.government.tax_brackets[i]
+        end
+        brackets[end] = typemax(Money)
+        target = target_revenue === nothing ?
+            div(country.government.income * count, population_total(country)) :
+            target_revenue
+        TaxConfig(TaxKind.INCOME, Int64(0), Int(tax_interval),
+                  TaxRecipient.EVERYONE, 0, brackets, rates, target,
+                  target > MONEY_ZERO, Money[])
+    else
+        TaxConfig(kind = TaxKind.NONE)
+    end
+
+    expenses = government_enabled ?
+        div(country.government.expenses * count, population_total(country)) :
+        MONEY_ZERO
+    government = GovernmentConfig(government_enabled, expenses,
+                                  deficit_spending,
+                                  div(country.government.debt * count,
+                                      population_total(country)))
+
+    gdp = GdpConfig(true, gdp_per_capita(country),
+                    permyriad(gdp_growth_per_year), 1)
+
+    return SimConfig(Int(periods), UInt64(seed), Int(record_interval),
+                     money, wealth, transactions, tax,
+                     PopulationConfig(count = count), government, gdp,
+                     AdaptationConfig(), BankConfig(), LoanCircuitConfig())
+end
+
+export CountryPopulation, CountryInequality, CountryCivilian
+export CountryGovernment, CountrySumsy, CountryData
+export population_total, money_per_capita, gdp_per_capita
+export belgium, unequal_wealth, country_config

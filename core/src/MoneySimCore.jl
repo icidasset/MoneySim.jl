@@ -23,5 +23,6 @@ include("adaptations.jl")
 include("money_models.jl")
 include("population.jl")
 include("run.jl")
+include("countries.jl")
 
 end
