@@ -427,6 +427,28 @@ using EconoSimCore
         @test result.periods == 1
         @test isfinite(result.gini[1])
         @test result.total[1] > 0
+
+        # Paper-3 direction checks at a 1,000-actor sample.
+        a1 = country_config(be; actors = 1_000, periods = 120,
+                            wealth_distribution = WealthDistribution.CUSTOM,
+                            tax_kind = TaxKind.NONE,
+                            government_enabled = false,
+                            record_interval = 12)
+        r1 = run_simulation(a1)
+        @test 0.40 < r1.gini[end] < 0.50
+        @test isapprox(r1.mean[end], currency(money_per_capita(be)); rtol = 0.01)
+
+        target = div((be.government.expenses - be.government.interest_cost) * 1_000,
+                     population_total(be))
+        a3 = country_config(be; actors = 1_000, periods = 120,
+                            wealth_distribution = WealthDistribution.CUSTOM,
+                            tax_kind = TaxKind.INCOME, tax_interval = 12,
+                            target_revenue = target,
+                            government_enabled = false,
+                            record_interval = 12)
+        r3 = run_simulation(a3)
+        @test r3.tax_collected[end] > 0
+        @test r3.gini[end] < r1.gini[end]
     end
 
     @testset "determinism" begin

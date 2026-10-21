@@ -109,53 +109,107 @@ function belgium()
         CountrySumsy(money(1_246.05), money(0), 1))
 end
 
+function _adjust_percentiles(low, mid, high)
+    mid = div(10 * mid - low, 9)
+    high = div(100 * high - 9 * mid - low, 90)
+    return low, mid, high
+end
+
 """
     unequal_wealth(country, actors) -> Vector{Money}
 
 Distribute the country's wealth percentiles across `actors`, scaled so the
-per-capita wealth equals `money_per_capita(country)`.
+per-capita wealth equals `money_per_capita(country)`. Uses the full
+0.1/1/10/40/40/10/1/0.1 percentile structure for runs of at least 1,000 actors.
 """
-function unequal_wealth(country::CountryData, actors::Int)
-    data = country.civilian.wealth
+function _distribute_country(data::CountryInequality, actors::Int,
+                            per_capita::Money)
     weighted = money(0)
     weighted += div(data.top_10, 10)
     weighted += div(data.high_middle_40 * 4, 10)
     weighted += div(data.low_middle_40 * 4, 10)
     weighted += div(data.bottom_10, 10)
-    target = money_per_capita(country)
+    target = per_capita * actors
 
     scale = weighted == MONEY_ZERO ? 0.0 :
-        Float64(target.value) / Float64(weighted.value)
+        Float64(per_capita.value) / Float64(weighted.value)
 
     function scaled(value::Money)
         return Money(round(Int64, Float64(value.value) * scale))
     end
 
-    bottom_count = max(1, round(Int, actors * 0.10))
-    low_count = max(1, round(Int, actors * 0.40))
-    high_count = max(1, round(Int, actors * 0.40))
-    top_count = max(0, actors - bottom_count - low_count - high_count)
+    if actors < 1_000
+        # Fall back to the four coarse groups for very small samples.
+        bottom_count = max(1, round(Int, actors * 0.10))
+        low_count = max(1, round(Int, actors * 0.40))
+        high_count = max(1, round(Int, actors * 0.40))
+        top_count = max(0, actors - bottom_count - low_count - high_count)
+        values = Vector{Money}(undef, actors)
+        index = 1
+        for _ in 1:bottom_count
+            values[index] = scaled(data.bottom_10); index += 1
+        end
+        for _ in 1:low_count
+            values[index] = scaled(data.low_middle_40); index += 1
+        end
+        for _ in 1:high_count
+            values[index] = scaled(data.high_middle_40); index += 1
+        end
+        for _ in 1:top_count
+            values[index] = scaled(data.top_10); index += 1
+        end
+        _rescale_total!(values, target)
+        return values
+    end
+
+    top_0_1, top_1, top_10 = _adjust_percentiles(data.top_0_1, data.top_1,
+                                                 data.top_10)
+    bottom_0_1, bottom_1, bottom_10 = data.bottom_0_1, data.bottom_1,
+                                      data.bottom_10
+
+    n0_1 = max(1, round(Int, actors * 0.001))
+    n1 = max(1, round(Int, actors * 0.01))
+    n10 = max(1, round(Int, actors * 0.10))
+    n50 = max(1, round(Int, actors * 0.50))
+    n90 = max(1, round(Int, actors * 0.90))
+    n99 = max(1, round(Int, actors * 0.99))
+    n999 = max(1, round(Int, actors * 0.999))
+
+    edges = (0, n0_1, n1, n10, n50, n90, n99, n999, actors)
+    groups = (bottom_0_1, bottom_1, bottom_10, data.low_middle_40,
+              data.high_middle_40, top_10, top_1, top_0_1)
 
     values = Vector{Money}(undef, actors)
-    index = 1
-    for _ in 1:bottom_count
-        values[index] = scaled(data.bottom_10)
-        index += 1
+    for group in 1:8
+        value = scaled(groups[group])
+        for index in (edges[group] + 1):edges[group + 1]
+            values[index] = value
+        end
     end
-    for _ in 1:low_count
-        values[index] = scaled(data.low_middle_40)
-        index += 1
-    end
-    for _ in 1:high_count
-        values[index] = scaled(data.high_middle_40)
-        index += 1
-    end
-    for _ in 1:top_count
-        values[index] = scaled(data.top_10)
-        index += 1
+
+    _rescale_total!(values, target)
+    return values
+end
+
+function _rescale_total!(values::Vector{Money}, target::Money)
+    total = sum(values)
+    delta, remainder = divrem(target.value - total.value, length(values))
+    for i in eachindex(values)
+        values[i] += Money(delta)
+        if i <= remainder
+            values[i] += Money(1)
+        end
     end
     return values
 end
+
+unequal_wealth(country::CountryData, actors::Int) =
+    _distribute_country(country.civilian.wealth, actors,
+                        money_per_capita(country))
+
+unequal_income(country::CountryData, actors::Int) =
+    _distribute_country(country.civilian.income, actors,
+                        gdp_per_capita(country))
 
 """
     country_config(country; kwargs...) -> SimConfig
@@ -177,6 +231,7 @@ function country_config(country::CountryData;
                         deficit_spending::Bool = false,
                         government_enabled::Bool = true,
                         gdp_growth_per_year::Real = 0.0,
+                        wealth_advantage::Real = 0.035,
                         record_interval::Integer = 12)
     count = Int(actors)
     per_capita = money_per_capita(country)
@@ -195,7 +250,7 @@ function country_config(country::CountryData;
                         country.sumsy.interval, Int64(0))
 
     transactions = TransactionConfig(false, 0, permyriad(0.2), MONEY_ZERO,
-                                     0.0, false)
+                                     Float64(wealth_advantage), false)
 
     tax = if tax_kind === TaxKind.INCOME
         rates = copy(country.government.tax_rates)
@@ -209,7 +264,7 @@ function country_config(country::CountryData;
             target_revenue
         TaxConfig(TaxKind.INCOME, Int64(0), Int(tax_interval),
                   TaxRecipient.EVERYONE, 0, brackets, rates, target,
-                  target > MONEY_ZERO, Money[])
+                  target > MONEY_ZERO, unequal_income(country, count))
     else
         TaxConfig(kind = TaxKind.NONE)
     end
@@ -234,4 +289,4 @@ end
 export CountryPopulation, CountryInequality, CountryCivilian
 export CountryGovernment, CountrySumsy, CountryData
 export population_total, money_per_capita, gdp_per_capita
-export belgium, unequal_wealth, country_config
+export belgium, unequal_wealth, unequal_income, country_config

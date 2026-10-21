@@ -30,12 +30,13 @@ julia --project=core -e 'using Pkg; Pkg.test()'
 
 ## Status
 
-- 93 native tests pass.
+- 97 native tests pass.
 - Phase 4b is complete for the current sim.wasm surface: the paper-1 loan
   circuit (growth and loan-rate modes, bank reserves, collapse rule) is
   implemented and matches the stable/collapse reference totals.
 - Phase 5a: the Belgium dataset and `country_config` derivation live here; the
-  TypeScript country preset is generated from `belgium()`.
+  TypeScript country preset is generated from `belgium()`. The tests include
+  paper-3 direction checks at a 1,000-actor sample.
 - The full minimal path runs under WasmTarget through `sim.wasm/wasm/`; the
   final Gini is bit-identical to native (`0.37746266868656675`).
 
