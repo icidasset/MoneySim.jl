@@ -1,10 +1,32 @@
-# Yard-sale transactions.
+# Transaction models.
 #
-# Two non-broke actors exchange a fraction of the poorer balance. The direction
-# is a weighted coin flip; the winner books income (the loser books expenses).
-# The transfer conserves money.
+# Two models share the same bookkeeping: yard-sale transfers between random
+# actors, and the consumer–supplier model from paper 2 (each consumer pays a
+# fixed demand × price to its supplier every step). Transfers conserve money;
+# winners book step income and losers book step expenses.
 
 const BROKE_THRESHOLD = Money(100) # 0.01 currency in scaled units
+
+"""
+    register_income!(state)
+
+Move the step's market income into the tax window and data accumulators,
+mirroring MoneySim's `register_income_and_expenses!`.
+"""
+function register_income!(state::SimState)
+    state.data_income_used = true
+    for i in eachindex(state.wealth)
+        is_alive(state, i) || continue
+        income = state.step_income[i]
+        state.income[i] += income
+        state.data_income[i] += income
+        state.vat_eligible[i] += income
+        state.expenses[i] += state.step_expenses[i]
+        state.step_income[i] = MONEY_ZERO
+        state.step_expenses[i] = MONEY_ZERO
+    end
+    return nothing
+end
 
 function _rand_non_broke(state::SimState, rng::Rng)
     state.n > 0 || return 0
@@ -27,16 +49,22 @@ function coinflip_prob(asset_value_1::Float64, asset_value_2::Float64,
 end
 
 """
-    yardsale_transfer!(state, cfg, rng, average_wealth) -> Money
+    yardsale_transfer!(state, cfg, money, rng, average_wealth, period) -> Money
 
 Execute one yard-sale transfer. Returns the amount moved (zero if the draw was
 invalid or the transfer was blocked by the minimum balance).
 """
 function yardsale_transfer!(state::SimState, cfg::TransactionConfig,
-                            rng::Rng, average_wealth::Float64)
+                            money::MoneyConfig, rng::Rng,
+                            average_wealth::Float64, period::Int)
     i = _rand_non_broke(state, rng)
     j = _rand_non_broke(state, rng)
     (i == j || i == 0 || j == 0) && return MONEY_ZERO
+
+    if money.transactional
+        adjust_transactional!(state, i, period, money)
+        adjust_transactional!(state, j, period, money)
+    end
 
     av1 = max(Int64(0), state.wealth[i].value)
     av2 = max(Int64(0), state.wealth[j].value)
@@ -53,17 +81,17 @@ function yardsale_transfer!(state::SimState, cfg::TransactionConfig,
 
     if rand_unit(rng) < probability_first
         if cfg.allow_negative || state.wealth[j] >= moved
-            state.wealth[i] += moved
-            state.income[i] += moved
+            state.wealth[i] = saturating_add(state.wealth[i], moved)
+            state.step_income[i] += moved
             state.wealth[j] -= moved
-            state.expenses[j] += moved
+            state.step_expenses[j] += moved
         end
     else
         if cfg.allow_negative || state.wealth[i] >= moved
-            state.wealth[j] += moved
-            state.income[j] += moved
+            state.wealth[j] = saturating_add(state.wealth[j], moved)
+            state.step_income[j] += moved
             state.wealth[i] -= moved
-            state.expenses[i] += moved
+            state.step_expenses[i] += moved
         end
     end
 
@@ -75,22 +103,24 @@ end
 
 Run the configured number of yard-sale transfers for one simulation step.
 """
-function transactions_step!(state::SimState, cfg::TransactionConfig, rng::Rng)
+function transactions_step!(state::SimState, cfg::TransactionConfig,
+                            money::MoneyConfig, rng::Rng, period::Int)
     (cfg.enabled && cfg.transactions_per_step > 0) || return nothing
     average = mean_wealth(state)
     for _ in 1:cfg.transactions_per_step
-        yardsale_transfer!(state, cfg, rng, average)
+        yardsale_transfer!(state, cfg, money, rng, average, period)
     end
     return nothing
 end
 
 """
-    gdp_transactions_step!(state, cfg, gdp, rng)
+    gdp_transactions_step!(state, cfg, gdp, money, rng, period)
 
 Run yard-sale transfers until the period's volume target is met.
 """
 function gdp_transactions_step!(state::SimState, cfg::TransactionConfig,
-                                gdp::GdpConfig, rng::Rng)
+                                gdp::GdpConfig, money::MoneyConfig,
+                                rng::Rng, period::Int)
     n = alive_count(state)
     n > 0 || return nothing
 
@@ -105,20 +135,64 @@ function gdp_transactions_step!(state::SimState, cfg::TransactionConfig,
     volume = Int64(0)
     guard = n * 50
     while volume < target && guard > 0
-        amount = yardsale_transfer!(state, cfg, rng, average)
+        amount = yardsale_transfer!(state, cfg, money, rng, average, period)
         volume += amount.value
         guard -= 1
     end
     return nothing
 end
 
-function transactions_step!(state::SimState, cfg::TransactionConfig,
-                            gdp::GdpConfig, rng::Rng)
-    if gdp.enabled
-        return gdp_transactions_step!(state, cfg, gdp, rng)
+"""
+    consumer_supplier_step!(state, cfg, money, period)
+
+Paper-2 consumer–supplier model. Every consumer pays `demand × price` to its
+supplier, reducing demand until the payment is affordable.
+"""
+function consumer_supplier_step!(state::SimState, cfg::TransactionConfig,
+                                 money::MoneyConfig, period::Int)
+    cfg.model === TransactionModel.CONSUMER_SUPPLIER || return nothing
+    cfg.demand > 0 || return nothing
+    cfg.price > MONEY_ZERO || return nothing
+
+    for i in eachindex(state.wealth)
+        (is_alive(state, i) && state.actor_role[i] == UInt8(2)) || continue
+        supplier = state.supplier_of[i]
+        (1 <= supplier <= state.n && is_alive(state, supplier)) || continue
+
+        money.transactional && adjust_transactional!(state, i, period, money)
+        available = state.wealth[i]
+
+        units = cfg.demand
+        while units > 0 && Money(units) * cfg.price.value > available
+            units -= 1
+        end
+        units <= 0 && continue
+
+        amount = Money(units) * cfg.price.value
+        amount <= MONEY_ZERO && continue
+        amount > available && continue
+
+        state.wealth[i] -= amount
+        state.step_expenses[i] += amount
+        state.wealth[supplier] = saturating_add(state.wealth[supplier], amount)
+        state.step_income[supplier] += amount
     end
-    return transactions_step!(state, cfg, rng)
+    return nothing
+end
+
+function transactions_step!(state::SimState, cfg::TransactionConfig,
+                            gdp::GdpConfig, money::MoneyConfig, rng::Rng,
+                            period::Int)
+    if cfg.model === TransactionModel.CONSUMER_SUPPLIER
+        cfg.enabled || return nothing
+        return consumer_supplier_step!(state, cfg, money, period)
+    end
+    if gdp.enabled
+        return gdp_transactions_step!(state, cfg, gdp, money, rng, period)
+    end
+    cfg.enabled || return nothing
+    return transactions_step!(state, cfg, money, rng, period)
 end
 
 export BROKE_THRESHOLD, coinflip_prob, yardsale_transfer!, transactions_step!
-export gdp_transactions_step!
+export gdp_transactions_step!, consumer_supplier_step!, register_income!

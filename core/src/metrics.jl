@@ -82,8 +82,8 @@ end
 """
     record_income!(results, state, index)
 
-Record the current income-window distribution. Call this before a tax
-assessment resets `state.income`.
+Record the income accumulated since the previous recording, then reset the
+accumulator. This mirrors the legacy `data_income` register.
 """
 function record_income!(results::ResultBuffers, state::SimState, index::Int)
     m = alive_count(state)
@@ -98,7 +98,8 @@ function record_income!(results::ResultBuffers, state::SimState, index::Int)
     end
 
     income_values = Vector{Float64}(undef, m)
-    _alive_values!(income_values, state.income, state)
+    _alive_values!(income_values, state.data_income_used ?
+                   state.data_income : state.income, state)
     sort!(income_values)
 
     if sum(income_values) <= 0.0
@@ -113,6 +114,8 @@ function record_income!(results::ResultBuffers, state::SimState, index::Int)
             results.income_shares[base + k] = income_shares[k]
         end
     end
+
+    fill!(state.data_income, MONEY_ZERO)
     return results
 end
 
@@ -131,6 +134,27 @@ function record_wealth!(results::ResultBuffers, state::SimState, index::Int,
     results.government_debt[index] = currency(state.loan_circuit_active ?
                                               state.bank_reserve :
                                               state.government_debt)
+    results.vat_collected[index] = currency(state.vat_collected)
+    state.vat_collected = MONEY_ZERO
+
+    total = total_wealth(state)
+    book_debt = MONEY_ZERO
+    for principal in state.loan_book_principal
+        book_debt += principal
+    end
+    if book_debt == MONEY_ZERO
+        for value in state.debt
+            book_debt += value
+        end
+    end
+
+    results.loan_debt[index] = currency(book_debt)
+    results.loan_equity[index] = currency(state.bank_reserve)
+    results.loan_issued[index] = currency(state.loan_issued)
+    results.growth_ratio[index] = state.loan_growth
+    results.profit_ratio[index] = state.loan_profit
+    results.loan_ratio[index] = total.value > 0 ?
+        100.0 * Float64(state.loan_issued.value) / Float64(total.value) : 0.0
 
     if m == 0
         results.gini[index] = 0.0

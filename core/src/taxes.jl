@@ -86,16 +86,65 @@ function bracket_tax(taxable::Money, brackets::Vector{Money},
     return max(tax, MONEY_ZERO)
 end
 
-function _scaled_rates(rates::Vector{Int64}, scale::Float64)
+"""
+    bracket_base!(bases, taxable, brackets)
+
+Add `taxable` to the per-band aggregate bases, mirroring the legacy
+`create_tax_base`.
+"""
+function bracket_base!(bases::Vector{Money}, taxable::Money,
+                       brackets::Vector{Money})
+    bands = length(bases)
+    remaining = max(taxable, MONEY_ZERO)
+    previous = MONEY_ZERO
+    for band in 1:bands
+        remaining <= MONEY_ZERO && break
+        upper = band == bands ? typemax(Money) : brackets[min(band, length(brackets))]
+        width = upper == typemax(Money) ? typemax(Money) : upper - previous
+        amount = width == typemax(Money) ? remaining : min(remaining, width)
+        bases[band] += amount
+        remaining -= amount
+        previous = upper
+    end
+    return bases
+end
+
+function _projected_revenue(bases::Vector{Money}, rates::Vector{Int64})
+    revenue = MONEY_ZERO
+    n = min(length(bases), length(rates))
+    for i in 1:n
+        revenue += apply_rate(bases[i], rates[i])
+    end
+    return revenue
+end
+
+"""
+    scale_brackets_exact(bases, brackets, rates, target) -> (rates, scale)
+
+Scale every non-edge band by `overall = target / projected`, round each rate to
+two decimals, and clamp to [0.1%, 95%]. This matches the paper reference runs:
+a8 scales down (0.4185 → 10/17/19/21%) and c3 scales up into the 95% ceiling.
+The returned `scale` is the rounded overall ratio.
+"""
+function scale_brackets_exact(bases::Vector{Money}, brackets::Vector{Money},
+                              rates::Vector{Int64}, target::Money)
+    n = min(length(bases), length(rates))
+    n == 0 && return copy(rates), 1.0
+
+    projected = _projected_revenue(bases, rates)
+    projected <= MONEY_ZERO && return copy(rates), 1.0
+
+    overall = round(Float64(target.value) / Float64(projected.value), digits = 2)
     applied = copy(rates)
-    for i in eachindex(applied)
-        rate_value = Float64(applied[i]) / Float64(PERMYRIAD)
-        if rate_value > 0.001 && rate_value < 0.95
-            scaled = max(0.001, min(0.95, round(rate_value * scale, digits = 2)))
+    for i in 1:n
+        value = Float64(applied[i]) / Float64(PERMYRIAD)
+        if value > 0.001 && value < 0.95
+            scaled = max(0.001, min(0.95, round(value * overall, digits = 2)))
             applied[i] = round(Int64, scaled * PERMYRIAD)
         end
     end
-    return applied
+
+    return applied, overall
 end
 
 """
@@ -138,21 +187,19 @@ function tax_step_income!(state::SimState, cfg::TaxConfig, period::Int)
     (cfg.interval > 0 && !isempty(cfg.bracket_rates)) || return MONEY_ZERO
 
     if mod(period - 1, cfg.interval) == 0
-        projected = MONEY_ZERO
+        bands = length(cfg.bracket_rates)
+        bases = fill(MONEY_ZERO, bands)
         for i in eachindex(state.wealth)
             is_alive(state, i) || continue
-            base = _income_base(state, i)
-            if base > MONEY_ZERO
-                projected += bracket_tax(base, cfg.brackets, cfg.bracket_rates)
-            end
+            bracket_base!(bases, _income_base(state, i), cfg.brackets)
         end
 
         applied = cfg.bracket_rates
-        if cfg.scale_to_target && cfg.target_revenue > MONEY_ZERO &&
-           projected > MONEY_ZERO
-            scale = Float64(cfg.target_revenue.value) / Float64(projected.value)
+        if cfg.scale_to_target && cfg.target_revenue > MONEY_ZERO
+            applied, scale = scale_brackets_exact(bases, cfg.brackets,
+                                                   cfg.bracket_rates,
+                                                   cfg.target_revenue)
             state.tax_scale = scale
-            applied = _scaled_rates(cfg.bracket_rates, scale)
         else
             state.tax_scale = 1.0
         end
@@ -160,10 +207,16 @@ function tax_step_income!(state::SimState, cfg::TaxConfig, period::Int)
         for i in eachindex(state.wealth)
             is_alive(state, i) || continue
             base = _income_base(state, i)
-            state.tax_owed[i] = base > MONEY_ZERO ?
-                bracket_tax(base, cfg.brackets, applied) : MONEY_ZERO
+            state.tax_owed[i] = if base > MONEY_ZERO
+                owed = bracket_tax(base, cfg.brackets, applied) - state.vat_deduction[i]
+                max(owed, MONEY_ZERO)
+            else
+                MONEY_ZERO
+            end
+            state.vat_deduction[i] = MONEY_ZERO
             state.income[i] = MONEY_ZERO
         end
+        state.notional_active = false
         state.tax_slices = cfg.interval
     end
 
@@ -176,7 +229,7 @@ function tax_step_income!(state::SimState, cfg::TaxConfig, period::Int)
         owed > MONEY_ZERO || continue
         slice = div(owed, state.tax_slices)
         slice > MONEY_ZERO || continue
-        levy = min(slice, max(state.wealth[i], MONEY_ZERO))
+        levy = cfg.allow_negative ? slice : min(slice, max(state.wealth[i], MONEY_ZERO))
         if levy > MONEY_ZERO
             state.wealth[i] -= levy
             state.tax_owed[i] -= levy
@@ -190,17 +243,132 @@ function tax_step_income!(state::SimState, cfg::TaxConfig, period::Int)
 end
 
 """
-    tax_step!(state, cfg, period) -> Money
+    tax_step_demurrage!(state, cfg, money, period) -> Money
+
+The demurrage tax is assessed on `balance - demurrage_free` using the same
+brackets and target scaling as the income tax. It is collected in slices and
+does not reduce the income base.
 """
-function tax_step!(state::SimState, cfg::TaxConfig, period::Int)
+function tax_step_demurrage!(state::SimState, cfg::TaxConfig,
+                             money::MoneyConfig, period::Int)
+    (cfg.interval > 0 && !isempty(cfg.bracket_rates)) || return MONEY_ZERO
+
+    if mod(period - 1, cfg.interval) == 0
+        bands = length(cfg.bracket_rates)
+        bases = fill(MONEY_ZERO, bands)
+        for i in eachindex(state.wealth)
+            is_alive(state, i) || continue
+            bracket_base!(bases, _demurrage_base(state, money, i), cfg.brackets)
+        end
+
+        applied = cfg.bracket_rates
+        if cfg.scale_to_target && cfg.target_revenue > MONEY_ZERO
+            applied, scale = scale_brackets_exact(bases, cfg.brackets,
+                                                   cfg.bracket_rates,
+                                                   cfg.target_revenue)
+            state.tax_scale = scale
+        else
+            state.tax_scale = 1.0
+        end
+
+        for i in eachindex(state.wealth)
+            is_alive(state, i) || continue
+            taxable = _demurrage_base(state, money, i)
+            state.tax_owed[i] = if taxable > MONEY_ZERO
+                owed = bracket_tax(taxable, cfg.brackets, applied) - state.vat_deduction[i]
+                max(owed, MONEY_ZERO)
+            else
+                MONEY_ZERO
+            end
+            state.vat_deduction[i] = MONEY_ZERO
+        end
+        state.tax_slices = cfg.interval
+    end
+
+    state.tax_slices > 0 || return MONEY_ZERO
+
+    collected = MONEY_ZERO
+    for i in eachindex(state.wealth)
+        is_alive(state, i) || continue
+        owed = state.tax_owed[i]
+        owed > MONEY_ZERO || continue
+        slice = div(owed, state.tax_slices)
+        slice > MONEY_ZERO || continue
+        levy = cfg.allow_negative ? slice : min(slice, max(state.wealth[i], MONEY_ZERO))
+        if levy > MONEY_ZERO
+            state.wealth[i] -= levy
+            state.tax_owed[i] -= levy
+            collected += levy
+        end
+    end
+    state.tax_slices -= 1
+
+    redistribute!(state, collected, cfg.recipient, cfg.recipient_actor)
+    return collected
+end
+
+@inline function _demurrage_base(state::SimState, money::MoneyConfig, i::Int)
+    free = isempty(money.typed_demurrage_free) ? money.demurrage_free :
+        money.typed_demurrage_free[clamp(Int(state.age_type[i]) + 1, 1, 3)]
+    return max(state.wealth[i] - free, MONEY_ZERO)
+end
+
+"""
+    vat_step!(state, cfg, tax, period) -> Money
+
+Collect VAT on income accumulated since the previous collection. The headline
+rate `r` charges `r / (1 + r)` of the eligible amount, mirroring
+`scale_vat` in the legacy tax scheme. VAT is redistributed to the configured
+recipients and, when `deduct_from_taxes` is set, reduces the next assessment.
+"""
+function vat_step!(state::SimState, cfg::VatConfig, tax::TaxConfig,
+                   period::Int)
+    (cfg.enabled && cfg.interval > 0) || return MONEY_ZERO
+    mod(period, cfg.interval) == 0 || return MONEY_ZERO
+
+    headline = Float64(cfg.rate) / Float64(PERMYRIAD)
+    scale = headline / (1.0 + headline)
+
+    collected = MONEY_ZERO
+    for i in eachindex(state.wealth)
+        is_alive(state, i) || continue
+        base = state.vat_eligible[i]
+        due = Money(round(Int64, Float64(base.value) * scale))
+        if !tax.allow_negative
+            due = min(due, max(state.wealth[i], MONEY_ZERO))
+        end
+        due = max(due, MONEY_ZERO)
+        if due > MONEY_ZERO
+            state.wealth[i] -= due
+            cfg.deduct_from_taxes && (state.vat_deduction[i] += due)
+            collected += due
+        end
+        state.vat_eligible[i] = MONEY_ZERO
+    end
+
+    redistribute!(state, collected, cfg.recipient, cfg.recipient_actor)
+    state.vat_collected = saturating_add(state.vat_collected, collected)
+    return collected
+end
+
+"""
+    tax_step!(state, cfg, money, period) -> Money
+"""
+function tax_step!(state::SimState, cfg::TaxConfig, money::MoneyConfig,
+                   period::Int)
     if cfg.kind === TaxKind.WEALTH
         return tax_step_wealth!(state, cfg, period)
     elseif cfg.kind === TaxKind.INCOME
         return tax_step_income!(state, cfg, period)
+    elseif cfg.kind === TaxKind.DEMURRAGE
+        return tax_step_demurrage!(state, cfg, money, period)
     end
     state.tax_scale = 1.0
     return MONEY_ZERO
 end
+
+tax_step!(state::SimState, cfg::TaxConfig, period::Int) =
+    tax_step!(state, cfg, MoneyConfig(), period)
 
 """
     government_step!(state, government, tax, collected)
@@ -220,5 +388,5 @@ function government_step!(state::SimState, government::GovernmentConfig,
     return nothing
 end
 
-export redistribute!, bracket_tax, tax_step_wealth!, tax_step_income!, tax_step!
-export government_step!
+export redistribute!, bracket_tax, tax_step_wealth!, tax_step_income!
+export tax_step_demurrage!, vat_step!, tax_step!, government_step!

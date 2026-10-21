@@ -207,9 +207,9 @@ unequal_wealth(country::CountryData, actors::Int) =
     _distribute_country(country.civilian.wealth, actors,
                         money_per_capita(country))
 
-unequal_income(country::CountryData, actors::Int) =
+unequal_income(country::CountryData, actors::Int; period::Integer = 1) =
     _distribute_country(country.civilian.income, actors,
-                        gdp_per_capita(country))
+                        gdp_per_capita(country) * Int(period))
 
 """
     country_config(country; kwargs...) -> SimConfig
@@ -245,12 +245,17 @@ function country_config(country::CountryData;
 
     demurrage_rate = Float64(country.sumsy.flat_gi.value) /
                      Float64(per_capita.value)
-    money = MoneyConfig(MoneyModel.SUMSY, country.sumsy.flat_gi,
-                        make_tiers(demurrage_rate), country.sumsy.demurrage_free,
-                        country.sumsy.interval, Int64(0))
+    money = MoneyConfig(model = MoneyModel.SUMSY,
+                        guaranteed_income = country.sumsy.flat_gi,
+                        demurrage = make_tiers(demurrage_rate),
+                        demurrage_free = country.sumsy.demurrage_free,
+                        interval = country.sumsy.interval,
+                        interest_rate = 0)
 
-    transactions = TransactionConfig(false, 0, permyriad(0.2), MONEY_ZERO,
-                                     Float64(wealth_advantage), false)
+    transactions = TransactionConfig(enabled = false,
+                                     transactions_per_step = 0,
+                                     transfer_rate = 0.2,
+                                     wealth_advantage = wealth_advantage)
 
     tax = if tax_kind === TaxKind.INCOME
         rates = copy(country.government.tax_rates)
@@ -262,9 +267,12 @@ function country_config(country::CountryData;
         target = target_revenue === nothing ?
             div(country.government.income * count, population_total(country)) :
             target_revenue
-        TaxConfig(TaxKind.INCOME, Int64(0), Int(tax_interval),
-                  TaxRecipient.EVERYONE, 0, brackets, rates, target,
-                  target > MONEY_ZERO, unequal_income(country, count))
+        TaxConfig(kind = TaxKind.INCOME, interval = tax_interval,
+                  recipient = TaxRecipient.EVERYONE,
+                  brackets = brackets, bracket_rates = rates,
+                  target_revenue = target,
+                  scale_to_target = target > MONEY_ZERO,
+                  notional = unequal_income(country, count; period = tax_interval))
     else
         TaxConfig(kind = TaxKind.NONE)
     end
@@ -272,18 +280,23 @@ function country_config(country::CountryData;
     expenses = government_enabled ?
         div(country.government.expenses * count, population_total(country)) :
         MONEY_ZERO
-    government = GovernmentConfig(government_enabled, expenses,
-                                  deficit_spending,
-                                  div(country.government.debt * count,
-                                      population_total(country)))
+    government = GovernmentConfig(enabled = government_enabled,
+                                  expenses = expenses,
+                                  deficit_spending = deficit_spending,
+                                  initial_debt = div(country.government.debt * count,
+                                                     population_total(country)))
 
-    gdp = GdpConfig(true, gdp_per_capita(country),
-                    permyriad(gdp_growth_per_year), 1)
+    gdp = GdpConfig(enabled = true, per_capita = gdp_per_capita(country),
+                    growth_permyriad = permyriad(gdp_growth_per_year),
+                    interval = 1)
 
-    return SimConfig(Int(periods), UInt64(seed), Int(record_interval),
-                     money, wealth, transactions, tax,
-                     PopulationConfig(count = count), government, gdp,
-                     AdaptationConfig(), BankConfig(), LoanCircuitConfig())
+    return SimConfig(periods = periods, seed = seed,
+                     record_interval = record_interval,
+                     money = money, wealth = wealth,
+                     transactions = transactions, tax = tax,
+                     population = PopulationConfig(count = count),
+                     government = government, gdp = gdp, adaptations = AdaptationConfig(),
+                     bank = BankConfig(), loan_circuit = LoanCircuitConfig())
 end
 
 export CountryPopulation, CountryInequality, CountryCivilian

@@ -111,6 +111,21 @@ using EconoSimCore
         collected = tax_step_income!(state, cfg, 1)
         @test collected == money(650)
         @test isapprox(state.tax_scale, 0.5; atol = 1e-9)
+
+        state = SimState(3)
+        state.wealth .= money(10_000)
+        state.income[1] = money(1_000)
+        state.income[2] = money(2_000)
+        state.income[3] = money(5_000)
+        cfg = TaxConfig(kind = TaxKind.INCOME, interval = 1,
+                        recipient = TaxRecipient.DESTROY,
+                        brackets = brackets,
+                        bracket_rates = Int64[1_000, 2_000, 3_000],
+                        target_revenue = money(1_950),
+                        scale_to_target = true)
+        collected = tax_step_income!(state, cfg, 1)
+        @test collected == money(1_950)
+        @test isapprox(state.tax_scale, 1.5; atol = 1e-9)
     end
 
     @testset "government deficit" begin
@@ -156,7 +171,7 @@ using EconoSimCore
         @test result.periods == 10
         @test isapprox(result.total[end], 50_000.0; rtol = 1e-9)
         @test result.gini[end] > 0.0
-        @test result.income_gini[end] >= 0.0
+        @test result.income_gini[1] >= 0.0
     end
 
     @testset "demographics" begin
@@ -240,7 +255,7 @@ using EconoSimCore
         state = SimState(cfg.population.count)
         results = ResultBuffers(1)
         run_simulation!(cfg, state, results)
-        @test sum(state.income) >= money(500)
+        @test sum(state.income) + sum(state.step_income) >= money(500)
         @test total_wealth(state) == money(10_000)
     end
 
@@ -438,7 +453,7 @@ using EconoSimCore
         @test 0.40 < r1.gini[end] < 0.50
         @test isapprox(r1.mean[end], currency(money_per_capita(be)); rtol = 0.01)
 
-        target = div((be.government.expenses - be.government.interest_cost) * 1_000,
+        target = div((be.government.expenses - be.government.interest_cost) * 12 * 1_000,
                      population_total(be))
         a3 = country_config(be; actors = 1_000, periods = 120,
                             wealth_distribution = WealthDistribution.CUSTOM,
@@ -472,5 +487,260 @@ using EconoSimCore
 
         @test noisy(7) == noisy(7)
         @test noisy(7) != noisy(8)
+    end
+
+    @testset "demurrage tax" begin
+        state = SimState(3)
+        state.wealth[1] = money(1_000)
+        state.wealth[2] = money(2_000)
+        state.wealth[3] = money(5_000)
+        cfg = TaxConfig(kind = TaxKind.DEMURRAGE, interval = 1,
+                        recipient = TaxRecipient.DESTROY,
+                        brackets = [money(1_000), money(5_000), typemax(Money)],
+                        bracket_rates = Int64[1_000, 2_000, 3_000])
+        collected = tax_step_demurrage!(state, cfg, MoneyConfig(), 1)
+        @test collected == money(1_300)
+        @test state.wealth == [money(900), money(1_700), money(4_100)]
+
+        state = SimState(2)
+        state.wealth[1] = money(1_000)
+        state.wealth[2] = money(600)
+        money_cfg = MoneyConfig(demurrage_free = money(500))
+        flat = TaxConfig(kind = TaxKind.DEMURRAGE, interval = 1,
+                         recipient = TaxRecipient.DESTROY,
+                         brackets = [typemax(Money)],
+                         bracket_rates = Int64[permyriad(0.10)])
+        collected = tax_step_demurrage!(state, flat, money_cfg, 1)
+        @test collected == money(60)
+        @test state.wealth == [money(950), money(590)]
+    end
+
+    @testset "VAT" begin
+        state = SimState(3)
+        state.wealth .= money(1_000)
+        for i in 1:3
+            state.vat_eligible[i] = money(1_000)
+        end
+        vat = VatConfig(enabled = true, rate = 0.10, interval = 1,
+                        recipient = TaxRecipient.DESTROY)
+        collected = vat_step!(state, vat, TaxConfig(kind = TaxKind.NONE), 1)
+        @test isapprox(currency(collected), 272.7273; atol = 1e-3)
+        @test isapprox(currency(state.wealth[1]), 909.0909; atol = 1e-3)
+        @test all(iszero, state.vat_eligible)
+
+        state = SimState(1)
+        state.wealth[1] = money(1_000)
+        state.vat_eligible[1] = money(1_000)
+        deduct = VatConfig(enabled = true, rate = 0.10, interval = 1,
+                           deduct_from_taxes = true,
+                           recipient = TaxRecipient.DESTROY)
+        vat_step!(state, deduct, TaxConfig(kind = TaxKind.NONE), 1)
+        @test state.vat_deduction[1] == money(90.9091)
+
+        income_tax = TaxConfig(kind = TaxKind.INCOME, interval = 1,
+                               recipient = TaxRecipient.DESTROY,
+                               brackets = [typemax(Money)],
+                               bracket_rates = Int64[permyriad(0.20)])
+        state.income[1] = money(1_000)
+        collected = tax_step_income!(state, income_tax, 1)
+        @test isapprox(currency(collected), 109.0909; atol = 1e-3)
+        @test state.vat_deduction[1] == MONEY_ZERO
+    end
+
+    @testset "fixed money model" begin
+        cfg = SimConfig(
+            periods = 10,
+            population = PopulationConfig(count = 10),
+            wealth = WealthConfig(distribution = WealthDistribution.EQUAL,
+                                  equal_amount = money(100)),
+            money = MoneyConfig(model = MoneyModel.FIXED, interval = 1),
+            transactions = TransactionConfig(enabled = false),
+            tax = TaxConfig(kind = TaxKind.NONE))
+        result = run_simulation(cfg)
+        @test result.total[end] == 1_000.0
+        @test result.mean[end] == 100.0
+    end
+
+    @testset "typed SuMSy by age" begin
+        cfg = SimConfig(
+            periods = 1,
+            population = PopulationConfig(count = 3,
+                                          age_shares = Int64[3_334, 3_333, 3_333]),
+            wealth = WealthConfig(distribution = WealthDistribution.EQUAL,
+                                  equal_amount = money(0)),
+            money = MoneyConfig(model = MoneyModel.SUMSY, interval = 1,
+                                guaranteed_income = money(0),
+                                demurrage = make_tiers(0.0),
+                                typed_guaranteed_income =
+                                    [money(100), money(200), money(300)]),
+            transactions = TransactionConfig(enabled = false))
+        state = SimState(3)
+        results = ResultBuffers(1)
+        run_simulation!(cfg, state, results)
+        @test state.age_type == UInt8[0, 1, 2]
+        @test state.wealth == [money(100), money(200), money(300)]
+    end
+
+    @testset "paper 2 — SUMSY equilibria" begin
+        tiers = [(0.0, 0.01), (50_000.0, 0.02), (500_000.0, 0.05),
+                 (1_000_000.0, 0.10), (10_000_000.0, 0.50),
+                 (50_000_000.0, 0.95)]
+
+        function sumsy_run(; eligible = 100, noneligible = 0,
+                           transactions = 200, periods = 4_500,
+                           demurrage = make_tiers(0.01), equal = false)
+            n = eligible + noneligible
+            base = telo(money(2_000), demurrage)
+            initial = noneligible > 0 ? div(base * eligible, n) : base
+            eligible_flags = Vector{UInt8}(undef, n)
+            for i in 1:n
+                eligible_flags[i] = i <= eligible ? UInt8(1) : UInt8(0)
+            end
+            cfg = SimConfig(
+                periods = periods,
+                record_interval = 30,
+                population = PopulationConfig(count = n,
+                                              gi_eligible = eligible_flags),
+                wealth = WealthConfig(distribution = WealthDistribution.EQUAL,
+                                      equal_amount = initial),
+                money = MoneyConfig(model = MoneyModel.SUMSY, interval = 30,
+                                    guaranteed_income = money(2_000),
+                                    demurrage = demurrage),
+                transactions = TransactionConfig(enabled = transactions > 0,
+                                                 transactions_per_step = transactions,
+                                                 transfer_rate = 0.2),
+                adaptations = AdaptationConfig(equal_distribution = equal,
+                                               equal_interval = 30),
+                tax = TaxConfig(kind = TaxKind.NONE))
+            return run_simulation(cfg).total[end]
+        end
+
+        @test isapprox(sumsy_run(), 20_000_000.0; rtol = 0.01)
+        @test isapprox(sumsy_run(noneligible = 25), 20_000_000.0; rtol = 0.01)
+
+        tiered = make_tiers(tiers)
+        e2 = sumsy_run(demurrage = tiered)
+        @test currency(telo(money(2_000) * 100, tiered)) * 0.99 <= e2
+        @test e2 <= currency(telo(money(2_000), tiered) * 100) * 1.01
+
+        e3 = sumsy_run(noneligible = 25, transactions = 0,
+                       demurrage = tiered, equal = true)
+        lower = currency(telo(money(2_000) * 100, tiered))
+        upper = currency(telo(div(money(2_000) * 100, 125), tiered) * 125)
+        @test lower * 0.99 <= e3 <= upper * 1.01
+
+        e5 = sumsy_run(noneligible = 25, demurrage = tiered)
+        @test lower * 0.99 <= e5 <= upper * 1.01
+    end
+
+    @testset "paper 2 — transactional demurrage" begin
+        n = 100
+        cfg = SimConfig(
+            periods = 4_500,
+            record_interval = 30,
+            population = PopulationConfig(count = n,
+                                          gi_eligible = fill(UInt8(1), n)),
+            wealth = WealthConfig(distribution = WealthDistribution.EQUAL,
+                                  equal_amount = money(200_000)),
+            money = MoneyConfig(model = MoneyModel.SUMSY, interval = 30,
+                                guaranteed_income = money(2_000),
+                                demurrage = make_tiers(0.01),
+                                transactional = true),
+            transactions = TransactionConfig(enabled = true,
+                                             transactions_per_step = 200,
+                                             transfer_rate = 0.2),
+            tax = TaxConfig(kind = TaxKind.NONE))
+        result = run_simulation(cfg)
+        @test all(isfinite, result.total)
+        @test all(>(0.0), result.total)
+        @test maximum(result.total) <= 20_000_000.0 * 1.01
+    end
+
+    @testset "paper 2 — consumer–supplier" begin
+        function consumer_supplier(consumers, demand, price, demurrage)
+            n = 1 + consumers
+            initial = telo(money(2_000), demurrage)
+            custom = Vector{Money}(undef, n)
+            custom[1] = MONEY_ZERO
+            for i in 2:n
+                custom[i] = initial
+            end
+            cfg = SimConfig(
+                periods = 45_000,
+                record_interval = 1_500,
+                population = PopulationConfig(count = n),
+                wealth = WealthConfig(distribution = WealthDistribution.CUSTOM,
+                                      custom = custom),
+                money = MoneyConfig(model = MoneyModel.SUMSY, interval = 30,
+                                    guaranteed_income = money(2_000),
+                                    demurrage = demurrage),
+                transactions = TransactionConfig(
+                    enabled = true, model = TransactionModel.CONSUMER_SUPPLIER,
+                    suppliers = 1, consumers_per_supplier = consumers,
+                    demand = demand, price = money(price)),
+                tax = TaxConfig(kind = TaxKind.NONE))
+            state = SimState(n)
+            results = ResultBuffers(30)
+            run_simulation!(cfg, state, results)
+            return currency(state.wealth[1])
+        end
+
+        flat = make_tiers(0.01)
+        @test isapprox(consumer_supplier(50, 5, 1, flat), 742_354.42; rtol = 1e-3)
+        @test isapprox(consumer_supplier(100, 5, 1, flat), 1_484_708.83; rtol = 1e-3)
+        @test isapprox(consumer_supplier(100, 3, 2, flat), 1_781_650.60; rtol = 1e-3)
+
+        tiered = make_tiers([(0.0, 0.01), (50_000.0, 0.02),
+                             (500_000.0, 0.05), (1_000_000.0, 0.10),
+                             (10_000_000.0, 0.50), (50_000_000.0, 0.95)])
+        @test isapprox(consumer_supplier(50, 5, 1, tiered), 392_749.90; rtol = 1e-3)
+        @test isapprox(consumer_supplier(100, 5, 1, tiered), 595_500.00; rtol = 1e-3)
+        @test isapprox(consumer_supplier(100, 3, 2, tiered), 652_600.00; rtol = 1e-3)
+    end
+
+    @testset "paper 1 — random loan circuit" begin
+        growth = SimConfig(
+            periods = 500,
+            seed = 7,
+            population = PopulationConfig(count = 100),
+            wealth = WealthConfig(distribution = WealthDistribution.EQUAL,
+                                  equal_amount = money(10_000)),
+            money = MoneyConfig(model = MoneyModel.LOAN_CIRCUIT, interval = 1,
+                                interest_rate = permyriad(0.05)),
+            transactions = TransactionConfig(enabled = true,
+                                             transactions_per_step = 2_000,
+                                             transfer_rate = 0.2),
+            loan_circuit = LoanCircuitConfig(
+                enabled = true, mode = 0, maturity = 20,
+                random_mode = LoanRandomMode.GROWTH,
+                min_value = 0.02, max_value = 0.12,
+                relative_profit = 0.0, no_loss = true))
+        result = run_simulation(growth)
+        @test result.periods == 500
+        @test all(isfinite, result.total)
+        @test all(isfinite, result.growth_ratio)
+        @test result.total[end] > 0.0
+
+        loan_rate = SimConfig(
+            periods = 500,
+            seed = 11,
+            population = PopulationConfig(count = 100),
+            wealth = WealthConfig(distribution = WealthDistribution.EQUAL,
+                                  equal_amount = money(10_000)),
+            money = MoneyConfig(model = MoneyModel.LOAN_CIRCUIT, interval = 1,
+                                interest_rate = permyriad(0.15)),
+            transactions = TransactionConfig(enabled = true,
+                                             transactions_per_step = 2_000,
+                                             transfer_rate = 0.2),
+            loan_circuit = LoanCircuitConfig(
+                enabled = true, mode = 1, profit_rate = 0.008, maturity = 20,
+                random_mode = LoanRandomMode.LOAN_RATE,
+                min_value = 0.10, max_value = 0.20,
+                min_maturity = 10, max_maturity = 30,
+                relative_profit = 0.008, no_loss = true))
+        result = run_simulation(loan_rate)
+        @test 0 < result.periods <= 500
+        @test all(isfinite, result.total)
+        @test all(isfinite, result.loan_debt)
     end
 end

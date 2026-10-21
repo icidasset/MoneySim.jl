@@ -5,9 +5,31 @@
 
 module MoneyModel
     const Kind = Int32
+    const FIXED = Int32(0)
     const SUMSY = Int32(1)
     const DEBT_BASED = Int32(2)
     const LOAN_CIRCUIT = Int32(3)
+end
+
+module TransactionModel
+    const Kind = Int32
+    const YARD_SALE = Int32(0)
+    const CONSUMER_SUPPLIER = Int32(1)
+end
+
+module AdaptationMode
+    const Kind = Int32
+    const NONE = Int32(0)
+    const TOTAL = Int32(1)
+    const PER_ACTOR = Int32(2)
+    const HALF_BALANCE = Int32(3)
+end
+
+module LoanRandomMode
+    const Kind = Int32
+    const FIXED = Int32(0)
+    const GROWTH = Int32(1)
+    const LOAN_RATE = Int32(2)
 end
 
 module TaxKind
@@ -47,6 +69,9 @@ struct MoneyConfig
     demurrage_free::Money
     interval::Int
     interest_rate::Int64
+    transactional::Bool
+    typed_guaranteed_income::Vector{Money}
+    typed_demurrage_free::Vector{Money}
 end
 
 function MoneyConfig(; model::MoneyModel.Kind = MoneyModel.SUMSY,
@@ -54,9 +79,13 @@ function MoneyConfig(; model::MoneyModel.Kind = MoneyModel.SUMSY,
                      demurrage::DemTiers = NO_DEM_TIERS,
                      demurrage_free::Money = MONEY_ZERO,
                      interval::Integer = 1,
-                     interest_rate::Integer = 0)
+                     interest_rate::Integer = 0,
+                     transactional::Bool = false,
+                     typed_guaranteed_income::Vector{Money} = Money[],
+                     typed_demurrage_free::Vector{Money} = Money[])
     return MoneyConfig(model, guaranteed_income, demurrage, demurrage_free,
-                       Int(interval), Int64(interest_rate))
+                       Int(interval), Int64(interest_rate), transactional,
+                       typed_guaranteed_income, typed_demurrage_free)
 end
 
 """
@@ -71,6 +100,12 @@ struct TransactionConfig
     minimal_transfer::Money
     wealth_advantage::Float64
     allow_negative::Bool
+    model::TransactionModel.Kind
+    suppliers::Int
+    consumers_per_supplier::Int
+    demand::Int
+    price::Money
+    suppliers_gi_eligible::Bool
 end
 
 function TransactionConfig(; enabled::Bool = false,
@@ -78,10 +113,18 @@ function TransactionConfig(; enabled::Bool = false,
                            transfer_rate::Real = 0.2,
                            minimal_transfer::Money = MONEY_ZERO,
                            wealth_advantage::Real = 0.0,
-                           allow_negative::Bool = false)
+                           allow_negative::Bool = false,
+                           model::TransactionModel.Kind = TransactionModel.YARD_SALE,
+                           suppliers::Integer = 0,
+                           consumers_per_supplier::Integer = 0,
+                           demand::Integer = 0,
+                           price::Money = MONEY_ZERO,
+                           suppliers_gi_eligible::Bool = false)
     return TransactionConfig(enabled, Int(transactions_per_step),
                              permyriad(transfer_rate), minimal_transfer,
-                             Float64(wealth_advantage), allow_negative)
+                             Float64(wealth_advantage), allow_negative,
+                             model, Int(suppliers), Int(consumers_per_supplier),
+                             Int(demand), price, suppliers_gi_eligible)
 end
 
 """
@@ -101,6 +144,7 @@ struct TaxConfig
     target_revenue::Money
     scale_to_target::Bool
     notional::Vector{Money}
+    allow_negative::Bool
 end
 
 function TaxConfig(; kind::TaxKind.Kind = TaxKind.NONE,
@@ -112,10 +156,11 @@ function TaxConfig(; kind::TaxKind.Kind = TaxKind.NONE,
                    bracket_rates::Vector{Int64} = Int64[],
                    target_revenue::Money = MONEY_ZERO,
                    scale_to_target::Bool = false,
-                   notional::Vector{Money} = Money[])
+                   notional::Vector{Money} = Money[],
+                   allow_negative::Bool = false)
     return TaxConfig(kind, permyriad(rate), Int(interval), recipient,
                      Int(recipient_actor), brackets, bracket_rates,
-                     target_revenue, scale_to_target, notional)
+                     target_revenue, scale_to_target, notional, allow_negative)
 end
 
 """
@@ -165,22 +210,64 @@ Money injection and destruction. Amounts are totals per interval, split
  equally among alive actors.
 """
 struct AdaptationConfig
-    inject_enabled::Bool
+    inject_mode::AdaptationMode.Kind
     inject_amount::Money
     inject_interval::Int
-    destroy_enabled::Bool
+    inject_one_time::Bool
+    destroy_mode::AdaptationMode.Kind
     destroy_amount::Money
     destroy_interval::Int
+    destroy_one_time::Bool
+    equal_distribution::Bool
+    equal_interval::Int
 end
 
-function AdaptationConfig(; inject_enabled::Bool = false,
+function AdaptationConfig(; inject_mode::AdaptationMode.Kind = AdaptationMode.NONE,
+                          inject_enabled::Union{Nothing, Bool} = nothing,
                           inject_amount::Money = MONEY_ZERO,
                           inject_interval::Integer = 1,
-                          destroy_enabled::Bool = false,
+                          inject_one_time::Bool = false,
+                          destroy_mode::AdaptationMode.Kind = AdaptationMode.NONE,
+                          destroy_enabled::Union{Nothing, Bool} = nothing,
                           destroy_amount::Money = MONEY_ZERO,
-                          destroy_interval::Integer = 1)
-    return AdaptationConfig(inject_enabled, inject_amount, Int(inject_interval),
-                            destroy_enabled, destroy_amount, Int(destroy_interval))
+                          destroy_interval::Integer = 1,
+                          destroy_one_time::Bool = false,
+                          equal_distribution::Bool = false,
+                          equal_interval::Integer = 0)
+    resolved_inject = inject_enabled === nothing ? inject_mode :
+        (inject_enabled ? AdaptationMode.TOTAL : AdaptationMode.NONE)
+    resolved_destroy = destroy_enabled === nothing ? destroy_mode :
+        (destroy_enabled ? AdaptationMode.TOTAL : AdaptationMode.NONE)
+    return AdaptationConfig(resolved_inject, inject_amount, Int(inject_interval),
+                            inject_one_time, resolved_destroy, destroy_amount,
+                            Int(destroy_interval), destroy_one_time,
+                            equal_distribution, Int(equal_interval))
+end
+
+"""
+    VatConfig
+
+Value-added tax collected on accumulated income. `rate` is the headline rate
+in permyriad; the collected amount uses `rate / (1 + rate)`. When
+`deduct_from_taxes` is set, collected VAT reduces the next tax assessment.
+"""
+struct VatConfig
+    enabled::Bool
+    rate::Int64
+    interval::Int
+    deduct_from_taxes::Bool
+    recipient::TaxRecipient.Kind
+    recipient_actor::Int
+end
+
+function VatConfig(; enabled::Bool = false,
+                   rate::Real = 0.0,
+                   interval::Integer = 0,
+                   deduct_from_taxes::Bool = false,
+                   recipient::TaxRecipient.Kind = TaxRecipient.EVERYONE,
+                   recipient_actor::Integer = 0)
+    return VatConfig(enabled, permyriad(rate), Int(interval),
+                     deduct_from_taxes, recipient, Int(recipient_actor))
 end
 
 """
@@ -219,14 +306,31 @@ struct LoanCircuitConfig
     profit_rate::Int64
     maturity::Int
     mode::Int32
+    random_mode::LoanRandomMode.Kind
+    min_value::Int64
+    max_value::Int64
+    min_maturity::Int
+    max_maturity::Int
+    relative_profit::Int64
+    no_loss::Bool
 end
 
 function LoanCircuitConfig(; enabled::Bool = false,
                            profit_rate::Real = 0.0,
                            maturity::Integer = 1,
-                           mode::Integer = 1)
+                           mode::Integer = 1,
+                           random_mode::LoanRandomMode.Kind = LoanRandomMode.FIXED,
+                           min_value::Real = 0.0,
+                           max_value::Real = 0.0,
+                           min_maturity::Integer = 1,
+                           max_maturity::Integer = 1,
+                           relative_profit::Real = 0.0,
+                           no_loss::Bool = true)
     return LoanCircuitConfig(enabled, permyriad(profit_rate), Int(maturity),
-                             Int32(mode))
+                             Int32(mode), random_mode, permyriad(min_value),
+                             permyriad(max_value), Int(min_maturity),
+                             Int(max_maturity), permyriad(relative_profit),
+                             no_loss)
 end
 
 """
@@ -265,6 +369,7 @@ struct PopulationConfig
     gi_adult::Bool
     gi_elder::Bool
     typed_gi::Bool
+    age_shares::Vector{Int64}
 end
 
 function PopulationConfig(; count::Integer = 100,
@@ -277,11 +382,13 @@ function PopulationConfig(; count::Integer = 100,
                           gi_child::Bool = true,
                           gi_adult::Bool = true,
                           gi_elder::Bool = true,
-                          typed_gi::Bool = false)
+                          typed_gi::Bool = false,
+                          age_shares::Vector{Int64} = Int64[])
     return PopulationConfig(Int(count), gi_eligible,
                             permyriad(birth_rate), permyriad(death_rate),
                             Int(aging_interval), permyriad(aging_rate),
-                            birth_wealth, gi_child, gi_adult, gi_elder, typed_gi)
+                            birth_wealth, gi_child, gi_adult, gi_elder, typed_gi,
+                            age_shares)
 end
 
 """
@@ -304,6 +411,7 @@ struct SimConfig
     adaptations::AdaptationConfig
     bank::BankConfig
     loan_circuit::LoanCircuitConfig
+    vat::VatConfig
 end
 
 function SimConfig(; periods::Integer = 100,
@@ -318,10 +426,11 @@ function SimConfig(; periods::Integer = 100,
                    gdp::GdpConfig = GdpConfig(),
                    adaptations::AdaptationConfig = AdaptationConfig(),
                    bank::BankConfig = BankConfig(),
-                   loan_circuit::LoanCircuitConfig = LoanCircuitConfig())
+                   loan_circuit::LoanCircuitConfig = LoanCircuitConfig(),
+                   vat::VatConfig = VatConfig())
     return SimConfig(Int(periods), UInt64(seed), Int(record_interval), money,
                      wealth, transactions, tax, population, government, gdp,
-                     adaptations, bank, loan_circuit)
+                     adaptations, bank, loan_circuit, vat)
 end
 
 const CONFIG_OK = Int32(0)
@@ -353,10 +462,13 @@ function validate_config(cfg::SimConfig)::Int32
     if cfg.transactions.enabled && cfg.transactions.transactions_per_step < 0
         return CONFIG_BAD_TRANSFERS
     end
-    if cfg.tax.kind === TaxKind.INCOME
+    if cfg.tax.kind === TaxKind.INCOME || cfg.tax.kind === TaxKind.DEMURRAGE
         (isempty(cfg.tax.bracket_rates) ||
          length(cfg.tax.brackets) != length(cfg.tax.bracket_rates)) &&
             return CONFIG_BAD_TAX_BRACKETS
+    end
+    if cfg.vat.enabled && cfg.vat.interval <= 0
+        return CONFIG_BAD_TAX_INTERVAL
     end
     if !isempty(cfg.population.gi_eligible) &&
        length(cfg.population.gi_eligible) != cfg.population.count
@@ -365,8 +477,10 @@ function validate_config(cfg::SimConfig)::Int32
     return CONFIG_OK
 end
 
-export MoneyModel, TaxKind, TaxRecipient, WealthDistribution
-export MoneyConfig, TransactionConfig, TaxConfig, WealthConfig, PopulationConfig
+export MoneyModel, TransactionModel, AdaptationMode, LoanRandomMode
+export TaxKind, TaxRecipient, WealthDistribution
+export MoneyConfig, TransactionConfig, TaxConfig, VatConfig, WealthConfig
+export PopulationConfig
 export GovernmentConfig, GdpConfig, AdaptationConfig, BankConfig, LoanCircuitConfig, SimConfig
 export CONFIG_OK, CONFIG_BAD_PERIODS, CONFIG_BAD_RECORD_INTERVAL
 export CONFIG_BAD_POPULATION, CONFIG_BAD_MONEY_INTERVAL, CONFIG_BAD_TAX_INTERVAL

@@ -11,15 +11,15 @@ This is Phase 4a of the wasm-ready core plan. The canonical plan lives in
 
 | File | Contents |
 |---|---|
-| `src/types.jl` | `SimConfig`, `MoneyConfig`, `TransactionConfig`, `TaxConfig`, `WealthConfig`, `PopulationConfig`, `GovernmentConfig`, `GdpConfig`, `AdaptationConfig`, `BankConfig` |
+| `src/types.jl` | `SimConfig`, `MoneyConfig`, `TransactionConfig`, `TaxConfig`, `VatConfig`, `WealthConfig`, `PopulationConfig`, `GovernmentConfig`, `GdpConfig`, `AdaptationConfig`, `BankConfig`, `LoanCircuitConfig` |
 | `src/state.jl` | `SimState` (structure-of-arrays), `ResultBuffers`, `SimResult` |
-| `src/metrics.jl` | Gini, mean/total/min/max, cumulative percentile shares, income Gini, tax scale, public debt |
-| `src/transactions.jl` | Yard-sale transactions and the GDP volume target |
-| `src/taxes.jl` | Wealth levy, progressive income tax with target scaling, all four recipient modes |
-| `src/money_models.jl` | SUMSY (GI + demurrage), homogeneous debt-based interest, post-Keynesian bank, paper-1 loan circuit |
-| `src/population.jl` | Fixed population, births/deaths/aging, typed GI eligibility |
-| `src/adaptations.jl` | Money injection and destruction |
-| `src/countries.jl` | Typed country datasets, Belgium 2023, unequal-wealth distribution, `country_config` derivation |
+| `src/metrics.jl` | Gini, mean/total/min/max, cumulative percentile shares, income Gini, tax scale, public debt, VAT, loan-circuit series |
+| `src/transactions.jl` | Yard-sale transactions, the GDP volume target, and the paper-2 consumer–supplier model |
+| `src/taxes.jl` | Wealth levy, progressive income tax and demurrage tax with legacy target scaling, VAT, all four recipient modes |
+| `src/money_models.jl` | Fixed money, SUMSY (GI + demurrage, transactional accounts, typed GI), homogeneous debt-based interest, post-Keynesian bank, paper-1 loan circuit (fixed and random growth/loan-rate modes) |
+| `src/population.jl` | Fixed population, births/deaths/aging, typed GI eligibility, initial age shares |
+| `src/adaptations.jl` | Money injection and destruction (total, per-actor, one-time, half-balance) and equal distribution |
+| `src/countries.jl` | Typed country datasets, Belgium 2023, unequal-wealth and unequal-income distribution, `country_config` derivation |
 | `src/run.jl` | `run_simulation` / `run_simulation!` |
 
 ## Test
@@ -30,15 +30,21 @@ julia --project=core -e 'using Pkg; Pkg.test()'
 
 ## Status
 
-- 97 native tests pass.
-- Phase 4b is complete for the current sim.wasm surface: the paper-1 loan
-  circuit (growth and loan-rate modes, bank reserves, collapse rule) is
-  implemented and matches the stable/collapse reference totals.
+- 135 native tests pass, including paper-1 closed-form checks, paper-2
+equilibria/bounds/consumer–supplier balances, and paper-3 direction checks.
+- Full feature parity with the papers: demurrage tax, VAT, tiered demurrage,
+  transactional SUMSY, consumer–supplier transactions, equal distribution,
+  one-time/constant injection and destruction, typed SuMSy by age, fixed money,
+  and fixed/random loan-circuit modes.
 - Phase 5a: the Belgium dataset and `country_config` derivation live here; the
-  TypeScript country preset is generated from `belgium()`. The tests include
-  paper-3 direction checks at a 1,000-actor sample.
-- The full minimal path runs under WasmTarget through `sim.wasm/wasm/`; the
-  final Gini is bit-identical to native (`0.37746266868656675`).
+  TypeScript country preset is generated from `belgium()`.
+- The full minimal path runs under WasmTarget through `sim.wasm/wasm/`; paper 1
+  and paper 2 are re-run end-to-end through the wasm ABI in
+  `wasm/test/paper-parity-minimal.mjs`, and paper 3 scenarios in
+  `wasm/test/paper3-minimal.mjs`.
+- `Money` is Int64 scaled by 10^4. Paper-1 random-growth runs can exceed that
+  range; the loan circuit saturates instead of wrapping, so the series stays
+  finite (documented in the plan).
 
 ## Configuration style
 
@@ -64,5 +70,8 @@ unaffected.
 
 ## Not here yet
 
-- VAT and demurrage tax (not required by the current sim.wasm surface).
-- The legacy `engine_run`/TypeScript cutover (Phase 3b).
+- The production module (blueprints, entities, needs, marginal actors) remains
+  in the high-level `MoneySim` package; it is analysis tooling, not simulation
+  state.
+- The legacy `Country` enum registry stays in `MoneySim` for compatibility; the
+  core uses typed `CountryData` values.

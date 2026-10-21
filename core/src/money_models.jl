@@ -1,25 +1,92 @@
 # Money-model steps.
 #
-# Phase 2 implements SUMSY fully and the legacy homogeneous-interest debt model.
-# The post-Keynesian bank and loan circuit follow in Phase 4.
+# `FIXED` leaves balances alone (paper 3's fixed-money scenarios). `SUMSY`
+# applies guaranteed income and demurrage. `DEBT_BASED` uses homogeneous
+# interest or the post-Keynesian bank. `LOAN_CIRCUIT` implements paper 1 in
+# growth and loan-rate modes, with optional per-cycle random draws.
+
+function _typed_value(values::Vector{Money}, index::Int, fallback::Money)
+    isempty(values) && return fallback
+    length(values) >= 3 || return fallback
+    return values[clamp(index, 1, 3)]
+end
+
+@inline _age_slot(state::SimState, i::Int) = Int(state.age_type[i]) + 1
+
+"""
+    adjust_transactional!(state, i, period, cfg)
+
+Apply the guaranteed income and demurrage accrued since actor `i`'s previous
+adjustment. Transactional accounts are adjusted on every touch, not on the
+periodic interval.
+"""
+function adjust_transactional!(state::SimState, i::Int, period::Int,
+                               cfg::MoneyConfig)
+    cfg.transactional || return nothing
+    (1 <= i <= state.n) || return nothing
+    is_alive(state, i) || return nothing
+
+    elapsed = period - state.last_adjustment[i]
+    elapsed <= 0 && return nothing
+
+    guaranteed_income = _typed_value(cfg.typed_guaranteed_income,
+                                     _age_slot(state, i), cfg.guaranteed_income)
+    demurrage_free = _typed_value(cfg.typed_demurrage_free,
+                                  _age_slot(state, i), cfg.demurrage_free)
+    sumsy = SuMSy(guaranteed_income, cfg.demurrage, demurrage_free)
+    gi, demurrage = calculate_adjustments(
+        state.wealth[i], sumsy, state.gi_eligible[i] == UInt8(1),
+        demurrage_free, cfg.interval, elapsed, false)
+    state.wealth[i] += gi - demurrage
+    state.last_adjustment[i] = period
+    return nothing
+end
+
+"""
+    pending_sumsy_assets(state, i, period, cfg) -> Money
+
+The balance an actor would have after applying accrued SuMSy adjustments,
+without mutating the state.
+"""
+function pending_sumsy_assets(state::SimState, i::Int, period::Int,
+                              cfg::MoneyConfig)::Money
+    cfg.transactional || return state.wealth[i]
+    elapsed = period - state.last_adjustment[i]
+    elapsed <= 0 && return state.wealth[i]
+
+    guaranteed_income = _typed_value(cfg.typed_guaranteed_income,
+                                     _age_slot(state, i), cfg.guaranteed_income)
+    demurrage_free = _typed_value(cfg.typed_demurrage_free,
+                                  _age_slot(state, i), cfg.demurrage_free)
+    sumsy = SuMSy(guaranteed_income, cfg.demurrage, demurrage_free)
+    gi, demurrage = calculate_adjustments(
+        state.wealth[i], sumsy, state.gi_eligible[i] == UInt8(1),
+        demurrage_free, cfg.interval, elapsed, false)
+    return state.wealth[i] + gi - demurrage
+end
 
 """
     sumsy_step!(state, cfg, period)
 
-Apply demurrage and guaranteed income every `cfg.interval` steps. Demurrage is
-charged on the opening balance above `demurrage_free`, then eligible actors
-receive the guaranteed income.
+Apply demurrage and guaranteed income every `cfg.interval` steps. Transactional
+accounts are adjusted on transactions instead, so the periodic step is skipped.
 """
 function sumsy_step!(state::SimState, cfg::MoneyConfig, period::Int)
+    cfg.transactional && return nothing
     (cfg.interval > 0 && mod(period, cfg.interval) == 0) || return nothing
 
-    sumsy = SuMSy(cfg.guaranteed_income, cfg.demurrage, cfg.demurrage_free)
     for i in eachindex(state.wealth)
         is_alive(state, i) || continue
-        guaranteed_income, demurrage = calculate_adjustments(
+        guaranteed_income = _typed_value(cfg.typed_guaranteed_income,
+                                         _age_slot(state, i),
+                                         cfg.guaranteed_income)
+        demurrage_free = _typed_value(cfg.typed_demurrage_free,
+                                      _age_slot(state, i), cfg.demurrage_free)
+        sumsy = SuMSy(guaranteed_income, cfg.demurrage, demurrage_free)
+        gi, demurrage = calculate_adjustments(
             state.wealth[i], sumsy, state.gi_eligible[i] == UInt8(1),
-            cfg.demurrage_free, cfg.interval, cfg.interval, false)
-        state.wealth[i] += guaranteed_income - demurrage
+            demurrage_free, cfg.interval, cfg.interval, false)
+        state.wealth[i] += gi - demurrage
     end
     return nothing
 end
@@ -28,7 +95,7 @@ end
     debt_step!(state, cfg, period)
 
 Homogeneous interest model: with no designated bank, every balance grows by the
-interest rate each interval. The bank/loan-circuit mechanics are Phase 4.
+interest rate each interval.
 """
 function debt_step!(state::SimState, cfg::MoneyConfig, period::Int)
     (cfg.interval > 0 && mod(period, cfg.interval) == 0) || return nothing
@@ -41,11 +108,6 @@ function debt_step!(state::SimState, cfg::MoneyConfig, period::Int)
     return nothing
 end
 
-"""
-    step_money!(state, cfg, period)
-
-Dispatch to the configured money model.
-"""
 function _lend_to_poorest!(state::SimState, bank::Int, targets::Int,
                            amount::Money)
     (targets > 0 && amount > MONEY_ZERO) || return nothing
@@ -114,11 +176,6 @@ function bank_step!(state::SimState, money::MoneyConfig, bank::BankConfig)
     return nothing
 end
 
-"""
-    step_money!(state, cfg, period)
-
-Dispatch to the configured money model.
-"""
 function _paper_interest(remaining::Money, rate::Int64)::Money
     value = Float64(remaining.value) / 10000.0 * (Float64(rate) / 10000.0)
     return Money(round(Int64, value * 10000.0))
@@ -173,7 +230,7 @@ function _resync_pro_rata!(state::SimState, old_total::Money, new_total::Money)
         is_alive(state, i) || continue
         scaled = Float64(state.wealth[i].value) * Float64(new_total.value) /
                  Float64(old_total.value)
-        state.wealth[i] = Money(round(Int64, scaled))
+        state.wealth[i] = Money(_clamp_int64(round(scaled)))
         total += state.wealth[i]
     end
 
@@ -190,15 +247,27 @@ function _resync_pro_rata!(state::SimState, old_total::Money, new_total::Money)
     return nothing
 end
 
-"""
-    loan_circuit_step!(state, money, loan, period)
+@inline function _rate_percent(permyriad_rate::Int64)::Float64
+    return 100.0 * Float64(permyriad_rate) / Float64(PERMYRIAD)
+end
 
-Paper-1 loan circuit. In growth mode every balance accrues interest and debt;
-in loan-rate mode the aggregate loan book is amortised and new loans are
-created from the remaining pool.
+@inline function _clamp_int64(value::Float64)::Int64
+    value >= Float64(typemax(Int64)) && return typemax(Int64)
+    value <= Float64(typemin(Int64)) && return typemin(Int64)
+    return round(Int64, value)
+end
+
+"""
+    loan_circuit_step!(state, money, loan, period, rng)
+
+Paper-1 loan circuit. In growth mode every balance accrues growth and debt
+accrues profit. In loan-rate mode the aggregate loan book is amortised and new
+loans are created from the remaining pool. `random_mode` draws the growth rate
+or loan rate and the maturity per cycle, matching `simulate_random_g` and
+`simulate_random_LR`.
 """
 function loan_circuit_step!(state::SimState, money::MoneyConfig,
-                            loan::LoanCircuitConfig, period::Int)
+                            loan::LoanCircuitConfig, period::Int, rng::Rng)
     loan.enabled || return nothing
 
     if loan.mode == 0
@@ -210,44 +279,72 @@ function loan_circuit_step!(state::SimState, money::MoneyConfig,
             state.loan_initialized = true
         end
 
-        if loan.profit_rate > 0
+        growth = money.interest_rate
+        profit = loan.profit_rate
+        if loan.random_mode === LoanRandomMode.GROWTH
+            growth = rand_between(rng, loan.min_value, loan.max_value)
+            profit = growth + loan.relative_profit
+            loan.no_loss && (profit = max(profit, Int64(0)))
+        end
+
+        created_total = MONEY_ZERO
+        if profit != 0
             for i in eachindex(state.wealth)
                 (is_alive(state, i) && state.debt[i] > MONEY_ZERO) || continue
-                converted = apply_rate(state.debt[i], loan.profit_rate)
-                state.bank_reserve += converted
-                state.debt[i] += converted
+                converted = apply_rate(state.debt[i], profit)
+                state.bank_reserve = saturating_add(state.bank_reserve, converted)
+                state.debt[i] = saturating_add(state.debt[i], converted)
             end
         end
 
-        if money.interest_rate > 0
+        if growth != 0
             for i in eachindex(state.wealth)
                 is_alive(state, i) || continue
-                created = apply_rate(state.wealth[i], money.interest_rate)
-                state.wealth[i] += created
-                state.debt[i] += created
+                created = apply_rate(state.wealth[i], growth)
+                state.wealth[i] = saturating_add(state.wealth[i], created)
+                state.debt[i] = saturating_add(state.debt[i], created)
+                created_total = saturating_add(created_total, created)
             end
         end
+
+        state.loan_issued = created_total
+        state.loan_growth = _rate_percent(growth)
+        state.loan_profit = _rate_percent(profit)
         return nothing
     end
 
     # Loan-rate mode: aggregate pool + amortisation book.
-    maturity = max(loan.maturity, 1)
-    pool = total_wealth(state)
+    old_pool = total_wealth(state)
+    loan_rate = money.interest_rate
+    if loan.random_mode === LoanRandomMode.LOAN_RATE
+        loan_rate = rand_between(rng, loan.min_value, loan.max_value)
+    end
+
+    new_maturity = loan.maturity
+    if loan.random_mode === LoanRandomMode.LOAN_RATE &&
+       loan.max_maturity > loan.min_maturity
+        new_maturity = Int(rand_between(rng, loan.min_maturity, loan.max_maturity))
+    end
 
     if !state.loan_initialized
-        push!(state.loan_book_principal, pool)
-        push!(state.loan_book_cycles, maturity)
-        push!(state.loan_book_rate, loan.profit_rate)
-        push!(state.loan_book_installment, _paper_installment(pool, maturity))
+        initial_rate = loan.random_mode === LoanRandomMode.LOAN_RATE ?
+            loan.relative_profit : loan.profit_rate
+        push!(state.loan_book_principal, old_pool)
+        push!(state.loan_book_cycles, max(new_maturity, 1))
+        push!(state.loan_book_rate, initial_rate)
+        push!(state.loan_book_installment,
+              _paper_installment(old_pool, max(new_maturity, 1)))
         state.loan_initialized = true
     end
 
+    pool = old_pool
     for l in eachindex(state.loan_book_principal)
         remaining = state.loan_book_principal[l]
         cycles = state.loan_book_cycles[l]
         payment = cycles <= 1 ? remaining : state.loan_book_installment[l]
         interest = _paper_interest(remaining, state.loan_book_rate[l])
-        pool -= payment + interest
+        pool = Money(saturating_add(pool.value,
+            -saturating_add(payment.value, interest.value)))
         state.loan_book_principal[l] = remaining - payment
         state.loan_book_cycles[l] = cycles - 1
     end
@@ -259,35 +356,48 @@ function loan_circuit_step!(state::SimState, money::MoneyConfig,
         popfirst!(state.loan_book_installment)
     end
 
-    new_loan = _paper_loan(pool, money.interest_rate)
+    new_loan = _paper_loan(pool, loan_rate)
+    growth_fraction = old_pool.value > 0 ?
+        Float64(pool.value + new_loan.value - old_pool.value) /
+        Float64(old_pool.value) : 0.0
+
+    profit = loan.profit_rate
+    if loan.random_mode === LoanRandomMode.LOAN_RATE
+        profit = round(Int64, growth_fraction * PERMYRIAD) + loan.relative_profit
+        loan.no_loss && (profit = max(profit, Int64(0)))
+    end
+
     if new_loan > MONEY_ZERO
-        pool += new_loan
+        pool = saturating_add(pool, new_loan)
         push!(state.loan_book_principal, new_loan)
-        push!(state.loan_book_cycles, maturity)
-        push!(state.loan_book_rate, loan.profit_rate)
-        push!(state.loan_book_installment, _paper_installment(new_loan, maturity))
+        push!(state.loan_book_cycles, max(new_maturity, 1))
+        push!(state.loan_book_rate, profit)
+        push!(state.loan_book_installment,
+              _paper_installment(new_loan, max(new_maturity, 1)))
     end
 
     book_debt = MONEY_ZERO
     for principal in state.loan_book_principal
-        book_debt += principal
+        book_debt = saturating_add(book_debt, principal)
     end
     state.bank_reserve = book_debt - pool
 
-    old_total = total_wealth(state)
     state.loan_pool = pool
     state.loan_collapsed = pool <= MONEY_ZERO
-    _resync_pro_rata!(state, old_total, pool)
+    state.loan_issued = new_loan
+    state.loan_growth = 100.0 * growth_fraction
+    state.loan_profit = _rate_percent(profit)
+    _resync_pro_rata!(state, old_pool, pool)
     return nothing
 end
 
 """
-    step_money!(state, cfg, bank, loan, period)
+    step_money!(state, cfg, bank, loan, period, rng)
 
 Dispatch to the configured money model.
 """
 function step_money!(state::SimState, cfg::MoneyConfig, bank::BankConfig,
-                     loan::LoanCircuitConfig, period::Int)
+                     loan::LoanCircuitConfig, period::Int, rng::Rng)
     if cfg.model === MoneyModel.SUMSY
         sumsy_step!(state, cfg, period)
     elseif cfg.model === MoneyModel.DEBT_BASED
@@ -297,9 +407,10 @@ function step_money!(state::SimState, cfg::MoneyConfig, bank::BankConfig,
             debt_step!(state, cfg, period)
         end
     elseif cfg.model === MoneyModel.LOAN_CIRCUIT
-        loan_circuit_step!(state, cfg, loan, period)
+        loan_circuit_step!(state, cfg, loan, period, rng)
     end
     return nothing
 end
 
 export sumsy_step!, debt_step!, bank_step!, loan_circuit_step!, step_money!
+export adjust_transactional!, pending_sumsy_assets, register_income!

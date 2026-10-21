@@ -11,11 +11,19 @@ function _grow_state!(state::SimState, new_n::Int)
     resize!(state.wealth, new_n)
     resize!(state.income, new_n)
     resize!(state.expenses, new_n)
+    resize!(state.step_income, new_n)
+    resize!(state.step_expenses, new_n)
+    resize!(state.data_income, new_n)
+    resize!(state.vat_eligible, new_n)
+    resize!(state.vat_deduction, new_n)
     resize!(state.debt, new_n)
     resize!(state.tax_owed, new_n)
     resize!(state.gi_eligible, new_n)
     resize!(state.alive, new_n)
     resize!(state.age_type, new_n)
+    resize!(state.actor_role, new_n)
+    resize!(state.supplier_of, new_n)
+    resize!(state.last_adjustment, new_n)
     resize!(state.scratch, new_n)
     resize!(state.income_scratch, new_n)
 
@@ -23,11 +31,19 @@ function _grow_state!(state::SimState, new_n::Int)
         state.wealth[i] = MONEY_ZERO
         state.income[i] = MONEY_ZERO
         state.expenses[i] = MONEY_ZERO
+        state.step_income[i] = MONEY_ZERO
+        state.step_expenses[i] = MONEY_ZERO
+        state.data_income[i] = MONEY_ZERO
+        state.vat_eligible[i] = MONEY_ZERO
+        state.vat_deduction[i] = MONEY_ZERO
         state.debt[i] = MONEY_ZERO
         state.tax_owed[i] = MONEY_ZERO
         state.gi_eligible[i] = UInt8(1)
         state.alive[i] = UInt8(1)
         state.age_type[i] = UInt8(0)
+        state.actor_role[i] = UInt8(0)
+        state.supplier_of[i] = 0
+        state.last_adjustment[i] = 0
     end
     state.n = new_n
     return state
