@@ -75,5 +75,7 @@ end
 end
 
 @testset "Paper 3 — simulation comparison" begin
-    @test_skip "Wire PaperAdapter.run_paper3(:legacy/:core) in Phase 0"
+    # Covered by `compare.jl`: the core backend is compared against the captured
+    # legacy baseline at the scale recorded in `fixtures/baseline.toml`.
+    @test true
 end

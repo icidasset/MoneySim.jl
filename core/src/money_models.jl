@@ -176,9 +176,21 @@ function bank_step!(state::SimState, money::MoneyConfig, bank::BankConfig)
     return nothing
 end
 
-function _paper_interest(remaining::Money, rate::Int64)::Money
-    value = Float64(remaining.value) / 10000.0 * (Float64(rate) / 10000.0)
-    return Money(round(Int64, value * 10000.0))
+"""
+    _paper_pool_debit(pool, payment, remaining, rate) -> Money
+
+Legacy keeps one aggregate Currency balance and applies `balance += -debit`
+for every loan in sequence, rounding the whole balance each time. Reproducing
+that balance-dependent rounding is what keeps long loan-rate runs on the same
+trajectory as the paper.
+"""
+function _paper_pool_debit(pool::Money, payment::Money, remaining::Money,
+                           rate::Int64)::Money
+    interest = Float64(remaining.value) / 10000.0 *
+               (Float64(rate) / 10000.0)
+    debit = Float64(payment.value) / 10000.0 + interest
+    value = Float64(pool.value) / 10000.0 - debit
+    return Money(_clamp_int64(value * 10000.0))
 end
 
 function _paper_loan(pool::Money, loan_rate::Int64)::Money
@@ -342,9 +354,8 @@ function loan_circuit_step!(state::SimState, money::MoneyConfig,
         remaining = state.loan_book_principal[l]
         cycles = state.loan_book_cycles[l]
         payment = cycles <= 1 ? remaining : state.loan_book_installment[l]
-        interest = _paper_interest(remaining, state.loan_book_rate[l])
-        pool = Money(saturating_add(pool.value,
-            -saturating_add(payment.value, interest.value)))
+        pool = _paper_pool_debit(pool, payment, remaining,
+                                 state.loan_book_rate[l])
         state.loan_book_principal[l] = remaining - payment
         state.loan_book_cycles[l] = cycles - 1
     end

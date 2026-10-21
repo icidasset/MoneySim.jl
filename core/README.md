@@ -44,7 +44,10 @@ equilibria/bounds/consumer–supplier balances, and paper-3 direction checks.
   `wasm/test/paper3-minimal.mjs`.
 - `Money` is Int64 scaled by 10^4. Paper-1 random-growth runs can exceed that
   range; the loan circuit saturates instead of wrapping, so the series stays
-  finite (documented in the plan).
+  finite (documented in the plan). The loan-rate mode reproduces the legacy
+  per-loan debit rounding (`installment + interest` rounded once, with the
+  running money balance rounded on each booking); this is what keeps the
+  500-cycle stable and collapse trajectories aligned.
 
 ## Configuration style
 

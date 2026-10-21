@@ -1,15 +1,18 @@
-# Entry point for the paper regression suite.
+# Entry point for the paper regression + before/after suite.
 #
 # Usage:
-#   PAPER_TESTS=fast julia --project=. test/papers/run.jl
-#   PAPER_TESTS=full julia --project=. test/papers/run.jl
+#   PAPER_TESTS=write julia --project=. test/papers/run.jl
+#   PAPER_TESTS=fast  julia --project=. test/papers/run.jl
+#   PAPER_TESTS=full  julia --project=. test/papers/run.jl
 #
-# `fast` runs the closed-form and analytic checks plus the fixture integrity
-# checks. `full` additionally runs the paper 3 country simulations once the
-# PaperAdapter core backend is wired (Phase 0).
+# `write` captures the legacy baseline into `fixtures/baseline.toml`.
+# `fast` runs the legacy paper checks plus the core-vs-baseline comparison.
+# `full` additionally runs all legacy paper-2 equilibria.
 #
-# Baseline capture (`PAPER_TESTS=write`) is specified in
-# docs/plans/2026-10-21-wasm-ready-core.md §9.2 and lands with the adapter.
+# The baseline captures paper 3 at `PAPER3_BASELINE_ACTORS` ×
+# `PAPER3_BASELINE_YEARS` (defaults 1000 × 10). Set
+# `PAPER3_BASELINE_ACTORS=10000 PAPER3_BASELINE_YEARS=100` for a paper-scale
+# nightly capture; the core comparison reads the scale back from the baseline.
 
 using Test
 
@@ -18,6 +21,14 @@ const PAPER_TESTS = get(ENV, "PAPER_TESTS", "fast")
 @info "Paper regression suite" mode = PAPER_TESTS
 
 include("scenarios.jl")
-include("paper1.jl")
-include("paper2.jl")
-include("paper3.jl")
+include("adapter.jl")
+
+if PAPER_TESTS == "write"
+    include("capture_baseline.jl")
+    capture_baseline()
+else
+    include("paper1.jl")
+    include("paper2.jl")
+    include("paper3.jl")
+    include("compare.jl")
+end

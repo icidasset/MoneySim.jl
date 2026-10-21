@@ -1,8 +1,8 @@
 # Paper-based regression suite
 
 This directory holds the before/after test suite for the WASM-ready refactor.
-The papers under `jupyter/` are the external oracle; a captured baseline is the
-internal oracle.
+The papers under `jupyter/` are the external oracle; a captured legacy baseline
+is the internal oracle.
 
 The full design is in the
 [`sim.wasm` plan](https://github.com/HapponomyOrg/sim.wasm/blob/main/docs/plans/2026-10-21-wasm-ready-core.md),
@@ -12,81 +12,96 @@ The full design is in the
 
 The refactor changes the money representation, the RNG, the config shape, and
 possibly the rounding. Structural tests alone cannot tell us whether the
-economics still behave. The papers give us concrete numbers:
+economics still behave. The suite compares the same scenario manifest through
+two backends:
 
-- **Paper 1** (`jupyter/paper 1/`) — closed-form debt-ratio and growth-ratio
-  values for the post-Keynesian loan circuit.
-- **Paper 2** (`jupyter/paper 2/`) — SUMSY money-stock equilibria and bounds
-  for equal/concentrated starts, injection/destruction, demurrage-free buffers,
-  and tiered demurrage.
-- **Paper 3** (`jupyter/paper 3/`) — full Belgium reference series, committed
-  as CSV under `jupyter/paper 3/data/<scenario>/`.
+- `backend = :legacy` — the pre-refactor `MoneySim` implementation;
+- `backend = :core` — `MoneySimCore`.
+
+Paper 1 and paper 2 are captured at their paper parameters. Paper 3 is captured
+at a reduced scale (default 1,000 actors × 10 years) so the live legacy capture
+stays practical; the scale is recorded in the baseline metadata.
 
 ## Workflow
 
-### 1. Capture the baseline (before the refactor)
-
 ```bash
+# 1. Capture the legacy baseline (before the refactor / after a manifest change)
 PAPER_TESTS=write julia --project=. test/papers/run.jl
-```
 
-This is the intended interface for capturing every scenario through the current
-implementation into `fixtures/baseline.json`. The capture runner lands in
-Phase 0 together with `adapter.jl`; until then the command runs the checks
-below.
-
-### 2. Check after the refactor
-
-```bash
-# Fast PR suite: paper 1 + paper 2 short scenarios + paper 3 fixture integrity
+# 2. PR suite: legacy paper checks + core-vs-baseline comparison
 PAPER_TESTS=fast julia --project=. test/papers/run.jl
 
-# Full nightly suite: all paper 2 equilibria + paper 3 at 10,000 actors
+# 3. Full suite: also runs every legacy paper-2 equilibrium
 PAPER_TESTS=full julia --project=. test/papers/run.jl
 ```
 
-The paper 3 simulation layer is currently a skipped placeholder; it is enabled
-when the `PaperAdapter` core backend is wired in Phase 0.
+`write` takes roughly 4–6 minutes (paper 2 dominates). Paper 3 can be captured
+at the paper scale for a nightly run:
 
-### 3. Adapters
+```bash
+PAPER3_BASELINE_ACTORS=10000 PAPER3_BASELINE_YEARS=100 \
+  PAPER_TESTS=write julia --project=. test/papers/run.jl
+```
 
-The same manifest is consumed by two adapters:
-
-- `adapter.jl` with `backend = :legacy` — the current `MoneySim` API;
-- `adapter.jl` with `backend = :core` — the refactored `MoneySimCore`.
-
-That is what makes the comparison meaningful: the scenarios do not change,
-only the implementation.
+The core comparison reads the actor/year scale back from
+`fixtures/baseline.toml`, so it always uses the same scale as the captured
+legacy run.
 
 ## Files
 
-| File | Status | Purpose |
+| File | Purpose |
+|---|---|
+| `scenarios.jl` | Canonical, data-only scenario manifest for papers 1–3 |
+| `adapter.jl` | `run_paper1/2/3(...; backend = :legacy/:core)` |
+| `compare.jl` | Tolerance-aware before/after comparison |
+| `capture_baseline.jl` | Writes `fixtures/baseline.toml` from the legacy backend |
+| `fixtures/baseline.toml` | Captured legacy numbers + metadata |
+| `paper1.jl` | Exact closed-form assertions from the paper 1 notebook |
+| `paper2.jl` | SUMSY scenarios, bounds, consumer–supplier balances |
+| `paper3.jl` | Fixture integrity (238 checks) |
+| `run.jl` | Entry point; honours `PAPER_TESTS` |
+
+## Paper 1 note
+
+The paper runs `M0 = 1,000,000`. The core comparison uses `M0 = 10,000` because
+the ratios are scale-invariant and scaled Int64 cannot represent the paper's
+`loan_rate_stable_m30` trajectory (it reaches ~10²⁶ currency). Every
+representable scenario is compared on debt ratio, growth ratio, and length;
+`loan_rate_stable_m30` is reported as skipped. The same Int64 limit is why the
+paper-1 random-growth series saturate instead of growing indefinitely.
+
+## Paper 3 tolerances
+
+The legacy and core RNG streams differ, so paper-3 levels are distribution
+checks, not trace checks:
+
+| Comparison | SUMSY scenarios | Fixed-money scenarios |
 |---|---|---|
-| `scenarios.jl` | implemented | Canonical, data-only scenario manifest for papers 1–3 |
-| `paper1.jl` | implemented | Exact closed-form assertions from the paper 1 notebook |
-| `paper2.jl` | implemented | SUMSY scenarios, bounds, and consumer–supplier balances |
-| `paper3.jl` | partial | Fixture integrity (238 checks); simulation comparison planned |
-| `run.jl` | implemented | Entry point; honours `PAPER_TESTS` |
-| `adapter.jl` | planned | Stable interface for `:legacy` and `:core` backends |
-| `compare.jl` | planned | Tolerance-aware comparators and report formatting |
-| `capture_baseline.jl` | planned | Writes `fixtures/baseline.json` |
-| `fixtures/` | planned | Captured baseline snapshots |
+| Gini wealth / income | ±0.06 | ±0.15 |
+| Tax scale | ±0.35 | ±0.40 |
+| Percentile shares | ±7 pp | ±8 pp |
+| Money stock | ±2% | ±2% |
+| Public debt | ±2% | ±2% |
+| Tax collected | ±2% (5% demurrage tax) | ±2% |
 
-## Current status (2026-10-21)
+Money, debt, and collected tax are the strict invariants. Direction checks
+(`a2 < a1`, `a3 < a1`, `b1 > a1`, `c3.scale > c2.scale`) are release-blocking.
+At the paper scale (10,000 actors × 100 years) the SUMSY distributions converge
+close to the committed fixtures; the fixed-money c-series is chaotic across RNG
+streams.
 
-Run against Julia 1.12.6 via `distrobox enter happy`:
+## Dependencies
 
+`MoneySimCore` and `EconoSimCore` are workspace sources in `Project.toml`:
+
+```toml
+[sources]
+EconoSimCore = {path = "../EconoSim.jl/core"}
+MoneySimCore = {path = "core"}
 ```
-Paper 1 — post-Keynesian endogenous money | 41 pass
-Paper 2 — SUMSY equilibria                | 30 pass (full); 4 scenarios + r1/r2 in fast mode
-Paper 3 — fixture integrity               | 238 pass
-Paper 3 — simulation comparison           | 1 broken (placeholder)
-```
 
-`PAPER_TESTS=full` takes about 7 minutes, dominated by the paper 2
-750-period scenarios. `PAPER_TESTS=fast` runs the four short scenarios
-(`a1`, `a2`, `b1`, `b2`) plus the consumer–supplier cases and finishes in about
-two minutes after compilation.
+This is a workspace-only source; published packages will use git URLs or
+registry versions.
 
 ## Paper 3 fixtures
 
@@ -103,24 +118,6 @@ jupyter/paper 3/data/<scenario>/model_data.csv
 
 **Do not load `actor_data.csv`.** For `b1` and `c1` it is 64–86 MB and is not
 needed for the aggregate checks.
-
-## Tolerances
-
-| Comparison | Rule |
-|---|---|
-| Native vs wasm, same config/seed | exact (bit-identical) |
-| Paper 1 ratios | ±0.1 percentage points (older notebook rounding) |
-| Paper 2 analytic bounds | 1% relative |
-| Paper 2 r1/r2 balances | 0.1% relative |
-| Paper 3 Gini | ±0.01 absolute |
-| Paper 3 money stock | ±0.5% relative |
-| Paper 3 public debt / tax collected | ±1% relative |
-| Paper 3 tax scale | ±0.05 absolute |
-| Paper 3 percentile shares | ±1.5 percentage points |
-
-If the refactor intentionally changes the RNG stream, year-by-year paper 3
-traces may exceed these tolerances. The runner reports trace and distribution
-results separately; only the distribution checks are release-blocking.
 
 ## Adding a scenario
 
