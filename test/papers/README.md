@@ -106,8 +106,10 @@ Three deterministic discrepancies were fixed to get there:
    includes via `init_income!` (this showed up as a year-2 tax and money-stock
    gap in `c1`).
 
-The multi-seed sweep confirms the remainder is mostly RNG noise: mean Gini
-deltas are ≤0.003 for all but `c4` (+0.016) and `u1` (+0.019).
+The multi-seed sweep confirms the remainder is RNG noise: with 10 seeds the
+mean Gini delta is ≤0.003 for almost every scenario; the largest are `u1`
+(+0.009) and `c4` (+0.004). The 5-seed run's `c4`/`u1` outliers (+0.016/+0.019)
+were sampling error.
 
 ## Paper 3 tolerances
 ## Multi-seed comparison
