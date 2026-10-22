@@ -34,6 +34,7 @@ const PAPER2_CONSUMER_RTOL = 1e-3
 # Paper-3 distribution tolerances.
 const PAPER3_MONEY_RTOL = 0.02
 const PAPER3_LEDGER_RTOL = 0.02
+const PAPER3_TAX_RTOL = 0.01
 
 function _paper3_tolerances(scenario)
     if scenario.params.monetary_type === :sumsy
@@ -154,8 +155,7 @@ end
                            rtol = PAPER3_LEDGER_RTOL)
             @test isapprox(after.tax_collected,
                            Float64(before["tax_collected"]);
-                           rtol = scenario.params.taxes === :demurrage ?
-                                  0.05 : PAPER3_LEDGER_RTOL)
+                           rtol = PAPER3_TAX_RTOL)
             if haskey(before, "tax_scale")
                 @test isapprox(after.tax_scale,
                                Float64(before["tax_scale"]);

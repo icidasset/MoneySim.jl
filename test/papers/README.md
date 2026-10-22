@@ -84,19 +84,19 @@ so it would split the native and wasm backends.
 
 ## Parity status
 
-At the committed comparison scale (1,000 actors × 10 years, seed 42), the
-largest single-seed deltas are now:
+At the committed comparison scale (1,000 actors × 10 years), with legacy and
+core both run at seed 42, the largest deltas are:
 
 | Metric | Max delta |
 |---|---|
 | Money stock / public debt | 0.25% |
-| Tax collected | 2.98% (`a10`, demurrage; <0.45% otherwise) |
-| Gini wealth | 0.023 |
+| Tax collected | 0.77% (`a10`); 0.60% (`c4`) |
+| Gini wealth | 0.029 (`c4`) |
 | Gini income | 0.017 |
 | Wealth / income shares | 2.2 pp |
-| Tax scale | 0.01 |
+| Tax scale | 0.02 |
 
-Three deterministic discrepancies were fixed to get there:
+Four deterministic discrepancies were fixed to get there:
 
 1. the Belgian income-tax schedule was missing the 0% band up to €10,190, so
    core taxed the first bracket at 25%;
@@ -104,14 +104,18 @@ Three deterministic discrepancies were fixed to get there:
    (`bottom_10` changes from −768 to +3,868);
 3. the first VAT window did not include projected/notional income, which legacy
    includes via `init_income!` (this showed up as a year-2 tax and money-stock
-   gap in `c1`).
+   gap in `c1`);
+4. scenario `a10` was missing `cover_expenses = true`, the legacy default for
+   demurrage tax. Legacy recorded a 0.96 downscale but only applies scaling when
+   revenue is *below* target, so the missing flag showed up as a 3% tax gap.
+   With the flag, `a10` matches the paper to 0.001% at 10k actors and is stable
+   at −0.77% vs legacy across seeds.
 
 The multi-seed sweep confirms the remainder is RNG noise: with 10 seeds the
 mean Gini delta is ≤0.003 for almost every scenario; the largest are `u1`
 (+0.009) and `c4` (+0.004). The 5-seed run's `c4`/`u1` outliers (+0.016/+0.019)
 were sampling error.
 
-## Paper 3 tolerances
 ## Multi-seed comparison
 
 The legacy backend uses Julia's global `MersenneTwister`; the core uses an
@@ -136,7 +140,7 @@ checks, not trace checks:
 | Percentile shares | ±7 pp | ±8 pp |
 | Money stock | ±2% | ±2% |
 | Public debt | ±2% | ±2% |
-| Tax collected | ±2% (5% demurrage tax) | ±2% |
+| Tax collected | ±1% | ±1% |
 
 Money, debt, and collected tax are the strict invariants. Direction checks
 (`a2 < a1`, `a3 < a1`, `b1 > a1`, `c3.scale > c2.scale`) are release-blocking.

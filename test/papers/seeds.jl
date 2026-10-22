@@ -37,10 +37,10 @@ end
 function _seed_tolerances(scenario)
     if scenario.params.monetary_type === :sumsy
         return (gini = 0.03, scale = 0.20, share = 3.5,
-                money = 0.01, debt = 0.01, tax = 0.025)
+                money = 0.01, debt = 0.01, tax = 0.01)
     end
     return (gini = 0.05, scale = 0.25, share = 4.0,
-            money = 0.01, debt = 0.01, tax = 0.025)
+            money = 0.01, debt = 0.01, tax = 0.01)
 end
 
 @testset "Paper 3 — seed robustness" begin
@@ -66,8 +66,7 @@ end
                 (:tax_scale, tolerance.scale, false),
                 (:money_stock, tolerance.money, true),
                 (:public_debt, tolerance.debt, true),
-                (:tax_collected, scenario.params.taxes === :demurrage ? 0.03 :
-                                 tolerance.tax, true),
+                (:tax_collected, tolerance.tax, true),
             )
                 legacy_stats = _seed_stats(legacy, field)
                 core_stats = _seed_stats(core, field)

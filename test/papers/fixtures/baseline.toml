@@ -1,8 +1,8 @@
 [meta]
-captured_at = "2026-10-21T22:48:15.333"
+captured_at = "2026-10-22T16:07:30.598"
 format = 1
 julia_version = "1.12.6"
-money_sim_sha = "9e383d6949257998e0b3e2faa2ba045b8cfeca00"
+money_sim_sha = "ec47296fd7d09360556c7a84f9b8f88e72bbe2a1"
 paper3_actors = 1000
 paper3_years = 10
 
@@ -198,7 +198,7 @@ income_top10_share = 31.7117
 money_stock = 5.76821662612e7
 public_debt = 5.25743155e7
 tax_collected = 2.61582056611e7
-tax_scale = 0.96
+tax_scale = 1.0
 top10_share = 41.5075
 
 [paper3.a2]
