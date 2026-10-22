@@ -427,9 +427,19 @@ using EconoSimCore
         @test money_per_capita(be) == div(be.money_stock, 11_697_556)
         @test gdp_per_capita(be) == div(be.government.gdp, 11_697_556)
 
+        # The Belgian schedule starts with a 0% band up to 10,190.
+        @test be.government.tax_rates == Int64[0, 2_500, 4_000, 4_500, 5_000]
+        brackets = vcat(be.government.tax_brackets, [typemax(Money)])
+        @test bracket_tax(money(10_190), brackets,
+                          be.government.tax_rates) == MONEY_ZERO
+        @test bracket_tax(money(10_200), brackets,
+                          be.government.tax_rates) == money(2.5)
+
         values = unequal_wealth(be, 1_000)
         @test length(values) == 1_000
         @test maximum(values) > minimum(values)
+        # Bottom overlap adjustment lifts bottom_10 above the raw negative value.
+        @test values[11] > MONEY_ZERO
         @test isapprox(currency(sum(values)),
                        currency(money_per_capita(be)) * 1_000; rtol = 1e-6)
 
@@ -536,6 +546,17 @@ using EconoSimCore
                            recipient = TaxRecipient.DESTROY)
         vat_step!(state, deduct, TaxConfig(kind = TaxKind.NONE), 1)
         @test state.vat_deduction[1] == money(90.9091)
+
+        # Projected income is part of the first VAT window, matching legacy
+        # `init_income!`.
+        notional_cfg = SimConfig(
+            periods = 1,
+            population = PopulationConfig(count = 2),
+            tax = TaxConfig(kind = TaxKind.NONE,
+                            notional = [money(100), money(200)]))
+        notional_state = SimState(2)
+        reset_state!(notional_state, notional_cfg)
+        @test notional_state.vat_eligible == [money(100), money(200)]
 
         income_tax = TaxConfig(kind = TaxKind.INCOME, interval = 1,
                                recipient = TaxRecipient.DESTROY,

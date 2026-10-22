@@ -26,9 +26,15 @@ include("adapter.jl")
 if PAPER_TESTS == "write"
     include("capture_baseline.jl")
     capture_baseline()
+elseif PAPER_TESTS == "seeds"
+    include("seeds.jl")
 else
     include("paper1.jl")
     include("paper2.jl")
     include("paper3.jl")
     include("compare.jl")
+
+    if parse(Int, get(ENV, "PAPER_SEEDS", "0")) >= 2
+        include("seeds.jl")
+    end
 end

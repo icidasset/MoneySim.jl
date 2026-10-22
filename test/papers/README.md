@@ -33,6 +33,12 @@ PAPER_TESTS=fast julia --project=. test/papers/run.jl
 
 # 3. Full suite: also runs every legacy paper-2 equilibrium
 PAPER_TESTS=full julia --project=. test/papers/run.jl
+
+# 4. Seed sweep: compare the mean over several seeds per backend
+PAPER_TESTS=seeds PAPER_SEEDS=5 julia --project=. test/papers/run.jl
+
+# or add the sweep to the PR suite
+PAPER_SEEDS=5 PAPER_TESTS=fast julia --project=. test/papers/run.jl
 ```
 
 `write` takes roughly 4–6 minutes (paper 2 dominates). Paper 3 can be captured
@@ -59,7 +65,8 @@ legacy run.
 | `paper1.jl` | Exact closed-form assertions from the paper 1 notebook |
 | `paper2.jl` | SUMSY scenarios, bounds, consumer–supplier balances |
 | `paper3.jl` | Fixture integrity (238 checks) |
-| `run.jl` | Entry point; honours `PAPER_TESTS` |
+| `seeds.jl` | Multi-seed paper-3 mean comparison (`PAPER_SEEDS`) |
+| `run.jl` | Entry point; honours `PAPER_TESTS` and `PAPER_SEEDS` |
 
 ## Paper 1 note
 
@@ -69,6 +76,51 @@ the ratios are scale-invariant and scaled Int64 cannot represent the paper's
 representable scenario is compared on debt ratio, growth ratio, and length;
 `loan_rate_stable_m30` is reported as skipped. The same Int64 limit is why the
 paper-1 random-growth series saturate instead of growing indefinitely.
+
+Int128 would represent that trajectory but would not remove any other delta:
+the remaining paper-3 gaps are stochastic/ordering differences, not
+representation. It is also not wasm-native (the ABI and JS bindings are i64),
+so it would split the native and wasm backends.
+
+## Parity status
+
+At the committed comparison scale (1,000 actors × 10 years, seed 42), the
+largest single-seed deltas are now:
+
+| Metric | Max delta |
+|---|---|
+| Money stock / public debt | 0.25% |
+| Tax collected | 2.98% (`a10`, demurrage; <0.45% otherwise) |
+| Gini wealth | 0.023 |
+| Gini income | 0.017 |
+| Wealth / income shares | 2.2 pp |
+| Tax scale | 0.01 |
+
+Three deterministic discrepancies were fixed to get there:
+
+1. the Belgian income-tax schedule was missing the 0% band up to €10,190, so
+   core taxed the first bracket at 25%;
+2. the bottom percentile groups were not overlap-adjusted, unlike legacy
+   (`bottom_10` changes from −768 to +3,868);
+3. the first VAT window did not include projected/notional income, which legacy
+   includes via `init_income!` (this showed up as a year-2 tax and money-stock
+   gap in `c1`).
+
+The multi-seed sweep confirms the remainder is mostly RNG noise: mean Gini
+deltas are ≤0.003 for all but `c4` (+0.016) and `u1` (+0.019).
+
+## Paper 3 tolerances
+## Multi-seed comparison
+
+The legacy backend uses Julia's global `MersenneTwister`; the core uses an
+explicit xorshift64 passed through every call. The streams (and even the number
+of draws) differ, so a single paper-3 seed can look worse than the underlying
+model parity. `PAPER_TESTS=seeds` runs both backends for seeds `1:N` and compares
+the mean outcome with tighter tolerances than the single-seed check.
+
+This is not "common random numbers": making the streams identical would require
+rewriting the legacy global `rand()` use and matching core draw order, and would
+not reflect what runs in wasm. Multi-seed is the more robust check.
 
 ## Paper 3 tolerances
 

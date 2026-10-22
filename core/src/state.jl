@@ -229,6 +229,13 @@ function reset_state!(state::SimState, cfg::SimConfig)
         end
         state.notional_active = true
     end
+    if state.notional_active
+        # Legacy initialises `vat_eligible` from the projected income assigned
+        # at setup (`init_income!`), so the first VAT window sees it too.
+        for i in 1:n
+            state.vat_eligible[i] = state.notional[i]
+        end
+    end
     state.tax_slices = 0
     state.tax_scale = 1.0
     state.tax_accum = MONEY_ZERO

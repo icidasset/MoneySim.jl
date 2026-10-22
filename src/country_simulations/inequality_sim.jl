@@ -164,6 +164,7 @@ function country_simulation_setup(country::Country;
                             sim_length = 100 * YEAR,
                             data_collection_interval::Int = YEAR,
                             lock_random_generator::Bool = true,
+                            random_seed::Union{Nothing, Integer} = nothing,
                             num_actors::Int,
                             monetary_type::MonetaryType = M_FIXED,
                             allow_negative_accounts::Bool = true,
@@ -185,7 +186,9 @@ function country_simulation_setup(country::Country;
                             percentage_tax_recipients::Real = 1,
                             interest_rate_on_debt::Real = get_interest_cost_per_capita(country) / get_government_debt_per_capita(country))
     # Simulation parameters
-    sim_params = SimParams(sim_length, lock_random_generator = lock_random_generator)
+    sim_params = SimParams(sim_length,
+                           lock_random_generator = lock_random_generator,
+                           random_seed = random_seed)
 
     # Model
     if monetary_type == M_FIXED

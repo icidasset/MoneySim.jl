@@ -97,7 +97,7 @@ function belgium()
         money(292_624_000_000 / 12),
         money(37_828_100_000 / 12),
         [money(10_190), money(15_200), money(26_830), money(46_440)],
-        Int64[2_500, 4_000, 4_500, 5_000, 5_000])
+        Int64[0, 2_500, 4_000, 4_500, 5_000])
 
     return CountryData(
         "belgium", 2023, money(674_000_000_000),
@@ -164,8 +164,9 @@ function _distribute_country(data::CountryInequality, actors::Int,
 
     top_0_1, top_1, top_10 = _adjust_percentiles(data.top_0_1, data.top_1,
                                                  data.top_10)
-    bottom_0_1, bottom_1, bottom_10 = data.bottom_0_1, data.bottom_1,
-                                      data.bottom_10
+    bottom_0_1, bottom_1, bottom_10 = _adjust_percentiles(data.bottom_0_1,
+                                                          data.bottom_1,
+                                                          data.bottom_10)
 
     n0_1 = max(1, round(Int, actors * 0.001))
     n1 = max(1, round(Int, actors * 0.01))

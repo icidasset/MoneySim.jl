@@ -375,7 +375,7 @@ function _parse_tax_scale(value)
     return parse(Float64, strip(matches[end][1]))
 end
 
-function _paper3_legacy(scenario, actors, years)
+function _paper3_legacy(scenario, actors, years; seed = nothing)
     params = scenario.params
     money_type = params.monetary_type === :sumsy ? M_SUMSY : M_FIXED
     tax_type = params.taxes === :income ? T_INCOME_TAX :
@@ -406,6 +406,7 @@ function _paper3_legacy(scenario, actors, years)
         vat_active = params.vat,
         deduct_vat_from_taxes = params.deduct_vat,
         vat_interval = MONTH,
+        random_seed = seed,
     )
     data === nothing && error("legacy country simulation returned nothing")
 
@@ -429,7 +430,7 @@ function _paper3_legacy(scenario, actors, years)
     )
 end
 
-function _paper3_core_config(scenario, actors, years)
+function _paper3_core_config(scenario, actors, years; seed = 42)
     params = scenario.params
     country = MC.belgium()
     population = MC.population_total(country)
@@ -530,7 +531,7 @@ function _paper3_core_config(scenario, actors, years)
 
     return MC.SimConfig(
         periods = years * MONTH * 12,
-        seed = 42,
+        seed = seed,
         record_interval = 12,
         money = money,
         wealth = wealth,
@@ -548,8 +549,8 @@ function _paper3_core_config(scenario, actors, years)
     )
 end
 
-function _paper3_core(scenario, actors, years)
-    cfg = _paper3_core_config(scenario, actors, years)
+function _paper3_core(scenario, actors, years; seed = 42)
+    cfg = _paper3_core_config(scenario, actors, years; seed = seed)
     result = MC.run_simulation(cfg)
     index = result.periods
     shares_base = (index - 1) * 6
@@ -577,10 +578,12 @@ end
 
 run_paper3(scenario; backend::Symbol = :legacy,
            actors::Integer = baseline_paper3_actors(),
-           years::Integer = baseline_paper3_years()) =
+           years::Integer = baseline_paper3_years(),
+           seed::Union{Nothing, Integer} = nothing) =
     backend === :legacy ?
-        _paper3_legacy(scenario, Int(actors), Int(years)) :
-        _paper3_core(scenario, Int(actors), Int(years))
+        _paper3_legacy(scenario, Int(actors), Int(years); seed = seed) :
+        _paper3_core(scenario, Int(actors), Int(years);
+                     seed = seed === nothing ? 42 : Int(seed))
 
 export Paper1Result, Paper2Result, Paper2ConsumerResult, Paper3Result
 export run_paper1, run_paper2_sumsy, run_paper2_consumer, run_paper3
